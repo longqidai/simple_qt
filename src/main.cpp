@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QNetworkProxy>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QUrl>
@@ -8,6 +9,11 @@
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+
+    // The arm and calibration device use direct TCP connections on the local
+    // network. Bypass any proxy configuration inherited by Qt, because HTTP
+    // and caching proxies cannot carry these raw device protocols.
+    QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::NoProxy));
 
     TcpController controller;
 
