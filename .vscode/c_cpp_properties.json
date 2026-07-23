@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "name": "Qt 5.14.2 MinGW",
+            "compilerPath": "D:/Qt/Qt5.14.2/Tools/mingw730_64/bin/g++.exe",
+            "intelliSenseMode": "windows-gcc-x64",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/src",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/**"
+            ],
+            "defines": [
+                "UNICODE",
+                "_UNICODE",
+                "WIN32"
+            ]
+        }
+    ],
+    "version": 4
+}

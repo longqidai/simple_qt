@@ -1,0 +1,43 @@
+# Build outputs
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+
+# qmake / Qt Creator user state
+*.pro.user
+*.pro.user.*
+CMakeUserPresets.json
+
+# Generated resources
+qml/qml_rc.py
+
+# Keep reusable VS Code tasks, exclude local settings
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/build-debug.ps1
+!.vscode/c_cpp_properties.json
+.idea/
+.agents/
+
+# Runtime data and logs
+log/
+logs/
+*.log
+*.tmp
+*.csv
+SLAM_calibration/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "调试 simple_qt (GDB)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\build-qmake-debug\\debug\\simple_qt.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}\\build-qmake-debug\\debug",
+            "environment": [
+                {
+                    "name": "PATH",
+                    "value": "D:\\Qt\\Qt5.14.2\\5.14.2\\mingw73_64\\bin;D:\\Qt\\Qt5.14.2\\Tools\\mingw730_64\\bin;${env:PATH}"
+                },
+                {
+                    "name": "QT_LOGGING_TO_CONSOLE",
+                    "value": "1"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "D:\\Qt\\Qt5.14.2\\Tools\\mingw730_64\\bin\\gdb.exe",
+            "setupCommands": [
+                {
+                    "description": "启用 GDB 友好打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "构建 simple_qt (Debug)"
+        }
+    ]
+}
