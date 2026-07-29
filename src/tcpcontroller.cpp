@@ -30,11 +30,212 @@ const int kScanTimeoutMs = 60000;
 const int kWifiTimeoutMs = 45000;
 const int kDeviceConnectTimeoutMs = 15000;
 const int kDeviceInfoTimeoutMs = 20000;
-const int kMqttTimeoutMs = 15000;
+const int kMqttTimeoutMs = 25000;
+const int kDeviceReadyTimeoutMs = 90000;
+const int kMqttReconnectBaseDelayMs = 1200;
+const int kWifiDisconnectGraceTicks = 4;
+const int kProjectTimeoutMs = 20000;
+const int kTaskTimeoutMs = 20000;
+const int kPreinitTimeoutMs = 60000;
+const int kModelingStartTimeoutMs = 120000;
 const int kCollectTimeoutMs = 20000;
 const int kCalibrationTimeoutMs = 10 * 60 * 1000;
 const int kStopCollectTimeoutMs = 30000;
+const int kModelingStopTimeoutMs = 5 * 60 * 1000;
 const int kPutBackTimeoutMs = 120000;
+
+const quint32 kProtocolSuccess = 0xF2040001u;
+
+struct ProtoField {
+    int number = 0;
+    int wireType = 0;
+    quint64 value = 0;
+    QByteArray bytes;
+};
+
+void appendProtoVarint(QByteArray &output, quint64 value)
+{
+    while (value >= 0x80u) {
+        output.append(static_cast<char>((value & 0x7fu) | 0x80u));
+        value >>= 7u;
+    }
+    output.append(static_cast<char>(value));
+}
+
+void appendProtoKey(QByteArray &output, int fieldNumber, int wireType)
+{
+    appendProtoVarint(output, (static_cast<quint64>(fieldNumber) << 3u)
+                                  | static_cast<quint64>(wireType));
+}
+
+void appendProtoUInt(QByteArray &output, int fieldNumber, quint64 value)
+{
+    appendProtoKey(output, fieldNumber, 0);
+    appendProtoVarint(output, value);
+}
+
+void appendProtoSInt(QByteArray &output, int fieldNumber, qint64 value)
+{
+    const quint64 magnitude = value < 0
+                                  ? static_cast<quint64>(-(value + 1)) + 1u
+                                  : static_cast<quint64>(value);
+    const quint64 encoded = value < 0 ? magnitude * 2u - 1u : magnitude * 2u;
+    appendProtoUInt(output, fieldNumber, encoded);
+}
+
+void appendProtoBytes(QByteArray &output, int fieldNumber, const QByteArray &value)
+{
+    appendProtoKey(output, fieldNumber, 2);
+    appendProtoVarint(output, static_cast<quint64>(value.size()));
+    output.append(value);
+}
+
+QByteArray makeProtoHeader(quint32 sequence, const QString &sessionId)
+{
+    QByteArray header;
+    appendProtoUInt(header, 1, sequence);
+    appendProtoSInt(header, 2, QDateTime::currentMSecsSinceEpoch() * 1000000ll);
+    appendProtoBytes(header, 3, sessionId.toUtf8());
+    return header;
+}
+
+bool readProtoVarint(const QByteArray &input, int &position, quint64 &value)
+{
+    value = 0;
+    int shift = 0;
+    while (position < input.size() && shift < 70) {
+        const quint8 byte = static_cast<quint8>(input.at(position++));
+        value |= static_cast<quint64>(byte & 0x7fu) << shift;
+        if ((byte & 0x80u) == 0)
+            return true;
+        shift += 7;
+    }
+    return false;
+}
+
+bool readProtoField(const QByteArray &input, int &position, ProtoField &field)
+{
+    quint64 key = 0;
+    if (!readProtoVarint(input, position, key) || key == 0)
+        return false;
+    field = ProtoField{};
+    field.number = static_cast<int>(key >> 3u);
+    field.wireType = static_cast<int>(key & 0x07u);
+
+    switch (field.wireType) {
+    case 0:
+        return readProtoVarint(input, position, field.value);
+    case 1:
+        if (position + 8 > input.size())
+            return false;
+        position += 8;
+        return true;
+    case 2: {
+        quint64 size = 0;
+        if (!readProtoVarint(input, position, size)
+            || size > static_cast<quint64>(input.size() - position)) {
+            return false;
+        }
+        field.bytes = input.mid(position, static_cast<int>(size));
+        position += static_cast<int>(size);
+        return true;
+    }
+    case 5:
+        if (position + 4 > input.size())
+            return false;
+        position += 4;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool protoVarintField(const QByteArray &message, int wantedField, quint64 &value)
+{
+    int position = 0;
+    ProtoField field;
+    while (position < message.size() && readProtoField(message, position, field)) {
+        if (field.number == wantedField && field.wireType == 0) {
+            value = field.value;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool protoBytesField(const QByteArray &message, int wantedField, QByteArray &value)
+{
+    int position = 0;
+    ProtoField field;
+    while (position < message.size() && readProtoField(message, position, field)) {
+        if (field.number == wantedField && field.wireType == 2) {
+            value = field.bytes;
+            return true;
+        }
+    }
+    return false;
+}
+
+qint64 decodeProtoSInt(quint64 value)
+{
+    return static_cast<qint64>((value >> 1u) ^ (quint64(0) - (value & 1u)));
+}
+
+struct ProtoError {
+    quint32 code = 0;
+    QString description;
+};
+
+ProtoError parseProtoErrorAt(const QByteArray &response, int fieldNumber)
+{
+    ProtoError result;
+    QByteArray errorMessage;
+    if (!protoBytesField(response, fieldNumber, errorMessage))
+        return result;
+    quint64 code = 0;
+    if (protoVarintField(errorMessage, 1, code))
+        result.code = static_cast<quint32>(code);
+    QByteArray description;
+    if (protoBytesField(errorMessage, 2, description))
+        result.description = QString::fromUtf8(description);
+    return result;
+}
+
+ProtoError parseProtoError(const QByteArray &response)
+{
+    return parseProtoErrorAt(response, 2);
+}
+
+bool protoSucceeded(const ProtoError &error)
+{
+    return error.code == 0 || error.code == kProtocolSuccess;
+}
+
+#ifdef Q_OS_WIN
+bool installOpenWifiProfile(HANDLE clientHandle, const GUID &interfaceGuid,
+                            const QString &ssid, DWORD *reasonCode)
+{
+    const QString escapedSsid = ssid.toHtmlEscaped();
+    const QString profileXml = QStringLiteral(
+        "<?xml version=\"1.0\"?>"
+        "<WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">"
+        "<name>%1</name><SSIDConfig><SSID><name>%1</name></SSID>"
+        "<nonBroadcast>false</nonBroadcast></SSIDConfig>"
+        "<connectionType>ESS</connectionType><connectionMode>manual</connectionMode>"
+        "<MSM><security><authEncryption><authentication>open</authentication>"
+        "<encryption>none</encryption><useOneX>false</useOneX>"
+        "</authEncryption></security></MSM></WLANProfile>")
+                                   .arg(escapedSsid);
+    DWORD localReasonCode = 0;
+    const DWORD result = WlanSetProfile(
+        clientHandle, &interfaceGuid, 0,
+        reinterpret_cast<LPCWSTR>(profileXml.utf16()), nullptr, TRUE,
+        nullptr, &localReasonCode);
+    if (reasonCode)
+        *reasonCode = localReasonCode;
+    return result == ERROR_SUCCESS;
+}
+#endif
 }
 
 TcpController::TcpController(QObject *parent)
@@ -54,23 +255,47 @@ TcpController::TcpController(QObject *parent)
     , m_failureAwaitingPutBack(false)
     , m_aborting(false)
     , m_cleaningUp(false)
+    , m_batchDownloadPhase(false)
+    , m_armSequenceFinished(false)
     , m_statusText(QStringLiteral("未连接"))
     , m_currentProgress(QStringLiteral("等待连接机械臂"))
     , m_host(QStringLiteral("127.0.0.1"))
     , m_port(9000)
     , m_handshakeAttempts(0)
     , m_wifiConnectTicks(0)
+    , m_wifiDisconnectTicks(0)
     , m_flowState(FlowState::Idle)
     , m_currentQueueIndex(-1)
+    , m_currentDownloadIndex(-1)
     , m_selectedCount(0)
     , m_successCount(0)
     , m_failureCount(0)
     , m_deviceHost(QStringLiteral("192.168.1.8"))
     , m_devicePort(25001)
     , m_mqttHost(QStringLiteral("192.168.1.8"))
-    , m_mqttPort(26001)
+    , m_mqttPort(1883)
+    , m_mqttPortCandidates({1883, 26001})
+    , m_mqttPortCandidateIndex(0)
+    , m_mqttPortFailureCount(0)
+    , m_mqttReconnectAttempts(0)
+    , m_protoSequence(0)
+    , m_protoSessionId(QStringLiteral("slam-calib-%1")
+                           .arg(QDateTime::currentMSecsSinceEpoch()))
+    , m_modelingProjectId(-1)
+    , m_modelingTaskId(-1)
+    , m_modelingStatus(-1)
+    , m_modelingActive(false)
+    , m_collectActive(false)
+    , m_deviceStatusReceived(false)
+    , m_deviceInitReady(false)
+    , m_retryModelingAfterDeviceReady(false)
+    , m_resumeModelingAfterPreinit(false)
+    , m_modelingStartRetries(0)
+    , m_collectStartRecoveryAttempts(0)
+    , m_retryCollectAfterStop(false)
     , m_ftpUrl(QStringLiteral("ftp://192.168.1.8:21/"))
-    , m_ftpUser(QStringLiteral("anonymous"))
+    , m_ftpUser(QStringLiteral("ftpuser"))
+    , m_ftpPassword(QStringLiteral("ftpuser"))
     , m_ftpPhase(0)
     , m_ftpTotalFiles(0)
     , m_ftpDownloadedFiles(0)
@@ -98,6 +323,29 @@ TcpController::TcpController(QObject *parent)
     connect(&m_wifiStatusTimer, &QTimer::timeout, this, &TcpController::checkWifiConnection);
     m_wifiStatusTimer.start();
 
+    m_deviceRetryTimer.setSingleShot(true);
+    connect(&m_deviceRetryTimer, &QTimer::timeout, this, [this]() {
+        if (m_taskActive && m_wifiConnected
+            && m_flowState == FlowState::ConnectingDevice) {
+            connectDeviceTcp();
+        }
+    });
+
+    m_mqttReconnectTimer.setSingleShot(true);
+    connect(&m_mqttReconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!m_taskActive || m_cleaningUp || !m_wifiConnected
+            || m_mqttClient->state() != QMqttClient::Disconnected) {
+            return;
+        }
+        ++m_mqttReconnectAttempts;
+        appendLog(QStringLiteral("MQTT 自动重连第 %1 次: %2:%3")
+                      .arg(m_mqttReconnectAttempts).arg(m_mqttHost).arg(m_mqttPort));
+        m_mqttSubscribed = false;
+        m_mqttClient->setHostname(m_mqttHost);
+        m_mqttClient->setPort(static_cast<quint16>(m_mqttPort));
+        m_mqttClient->connectToHost();
+    });
+
     m_handshakeTimer.setSingleShot(true);
     connect(&m_handshakeTimer, &QTimer::timeout, this, &TcpController::onHandshakeTimeout);
 
@@ -113,27 +361,54 @@ TcpController::TcpController(QObject *parent)
     connect(m_mqttClient, &QMqttClient::stateChanged, this,
             [this](QMqttClient::ClientState state) {
         const bool connectedNow = state == QMqttClient::Connected;
+        const bool wasConnected = m_mqttConnected;
         if (m_mqttConnected != connectedNow) {
             m_mqttConnected = connectedNow;
             emit mqttConnectedChanged();
         }
 
-        if (!connectedNow)
+        if (!connectedNow) {
+            if (m_taskActive && !m_cleaningUp
+                && state == QMqttClient::Disconnected) {
+                if (wasConnected)
+                    appendLog(QStringLiteral("MQTT 连接暂时中断，进入自动恢复流程"));
+                scheduleMqttReconnect();
+            }
             return;
-
-        appendLog(QStringLiteral("MQTT 已连接: %1:%2").arg(m_mqttHost).arg(m_mqttPort));
-        if (!m_mqttSubscribed) {
-            QMqttSubscription *subscription = m_mqttClient->subscribe(
-                QMqttTopicFilter(QStringLiteral("slam_app/response/data_collect")), 1);
-            m_mqttSubscribed = subscription != nullptr;
-            appendLog(m_mqttSubscribed
-                          ? QStringLiteral("MQTT 已订阅: slam_app/response/data_collect")
-                          : QStringLiteral("MQTT 订阅失败"));
         }
 
+        const bool reconnected = m_mqttReconnectAttempts > 0;
+        m_mqttReconnectTimer.stop();
+        m_mqttPortFailureCount = 0;
+        m_mqttReconnectAttempts = 0;
+        appendLog(QStringLiteral("MQTT 已连接: %1:%2").arg(m_mqttHost).arg(m_mqttPort));
+        if (!m_mqttSubscribed)
+            m_mqttSubscribed = subscribeMqttTopics();
+
         if (m_taskActive && m_flowState == FlowState::ConnectingMqtt) {
-            if (!publishCollectAction(QStringLiteral("AC_START")))
-                failCurrentSlot(QStringLiteral("MQTT 发布 AC_START 失败"));
+            if (!m_mqttSubscribed) {
+                failCurrentSlot(QStringLiteral("MQTT 扫描控制主题订阅失败"));
+                return;
+            }
+            QTimer::singleShot(300, this, [this]() {
+                if (!m_taskActive || m_flowState != FlowState::ConnectingMqtt)
+                    return;
+                setFlowState(FlowState::WaitingDeviceReady,
+                             QStringLiteral("MQTT 已连接，等待设备初始化完成"),
+                             kDeviceReadyTimeoutMs);
+                appendLog(QStringLiteral("等待设备状态 init_ready=1 后再启动扫描流程"));
+                QTimer::singleShot(6000, this, [this]() {
+                    if (!m_taskActive || m_flowState != FlowState::WaitingDeviceReady
+                        || m_deviceStatusReceived || m_retryModelingAfterDeviceReady)
+                        return;
+                    appendLog(QStringLiteral("6 秒内未收到 device_status，按旧固件兼容模式尝试启动；若设备未就绪将自动等待并重试"));
+                    if (!publishProjectCreate())
+                        failCurrentSlot(QStringLiteral("兼容模式下无法创建扫描工程"));
+                });
+            });
+        } else if (reconnected && m_taskActive) {
+            appendLog(QStringLiteral("MQTT 已自动恢复，继续当前流程"));
+            QTimer::singleShot(300, this, &TcpController::resumeMqttOperation);
         }
     });
 
@@ -146,13 +421,40 @@ TcpController::TcpController(QObject *parent)
             [this](QMqttClient::ClientError error) {
         if (error == QMqttClient::NoError)
             return;
-        appendLog(QStringLiteral("MQTT 错误，错误码: %1").arg(static_cast<int>(error)));
-        if (m_taskActive
-            && (m_flowState == FlowState::ConnectingMqtt
-                || m_flowState == FlowState::StartingCollection
-                || m_flowState == FlowState::Calibrating
-                || m_flowState == FlowState::StoppingCollection)) {
-            failCurrentSlot(QStringLiteral("MQTT 通信失败"));
+        const QString errorName = error == QMqttClient::TransportInvalid
+                                      ? QStringLiteral("TransportInvalid（底层 TCP 未建立）")
+                                      : QStringLiteral("错误码 %1").arg(static_cast<int>(error));
+        appendLog(QStringLiteral("MQTT %1，目标 %2:%3")
+                      .arg(errorName, m_mqttHost).arg(m_mqttPort));
+        if (m_taskActive && m_flowState == FlowState::ConnectingMqtt
+            && error == QMqttClient::TransportInvalid) {
+            ++m_mqttPortFailureCount;
+            if (m_mqttPortFailureCount < 3) {
+                appendLog(QStringLiteral("MQTT %1:%2 暂时不可用，先重试当前端口（%3/3）")
+                              .arg(m_mqttHost).arg(m_mqttPort)
+                              .arg(m_mqttPortFailureCount));
+            } else if (m_mqttPortCandidateIndex + 1 < m_mqttPortCandidates.size()) {
+                ++m_mqttPortCandidateIndex;
+                m_mqttPort = m_mqttPortCandidates.at(m_mqttPortCandidateIndex);
+                m_mqttPortFailureCount = 0;
+                appendLog(QStringLiteral("MQTT 当前端口连续失败，改试 %1:%2")
+                              .arg(m_mqttHost).arg(m_mqttPort));
+            } else {
+                appendLog(QStringLiteral("MQTT 所有候选端口均不可用，继续在超时范围内重连"));
+            }
+            m_mqttClient->disconnectFromHost();
+            QTimer::singleShot(800, this, [this]() {
+                if (!m_taskActive || m_flowState != FlowState::ConnectingMqtt)
+                    return;
+                m_mqttClient->setPort(static_cast<quint16>(m_mqttPort));
+                m_mqttSubscribed = false;
+                m_mqttClient->connectToHost();
+            });
+            return;
+        }
+        if (m_taskActive && !m_cleaningUp) {
+            appendLog(QStringLiteral("MQTT 异常暂不判定槽位失败，将自动重连"));
+            scheduleMqttReconnect();
         }
     });
 
@@ -269,7 +571,11 @@ void TcpController::clearTaskResults()
         return;
     m_taskQueue.clear();
     m_resultRecorded.clear();
+    m_deferredDownloads.clear();
     m_currentQueueIndex = -1;
+    m_currentDownloadIndex = -1;
+    m_batchDownloadPhase = false;
+    m_armSequenceFinished = false;
     m_leftSlotStates.clear();
     m_rightSlotStates.clear();
     for (int i = 0; i < 6; ++i) {
@@ -311,10 +617,18 @@ void TcpController::onArmDisconnected()
     emit connectedChanged();
     emit armReadyChanged();
     m_handshakeTimer.stop();
-    stopStepTimer();
+    if (!m_batchDownloadPhase)
+        stopStepTimer();
     m_statusText = QStringLiteral("未连接");
     emit statusTextChanged();
     appendLog(QStringLiteral("机械臂连接已断开"));
+
+    // All devices have already been returned before the deferred-download phase.
+    // An arm disconnect must not discard the data that is still waiting on FTP.
+    if (wasTaskActive && m_batchDownloadPhase) {
+        appendLog(QStringLiteral("机械臂已完成全部测量，继续执行统一下载"));
+        return;
+    }
 
     if (wasTaskActive) {
         setCurrentSlotState(QStringLiteral("failed"));
@@ -333,7 +647,7 @@ void TcpController::onArmError(QAbstractSocket::SocketError socketError)
     m_statusText = QStringLiteral("连接失败: %1").arg(m_armSocket->errorString());
     emit statusTextChanged();
     appendLog(m_statusText);
-    if (!m_connected)
+    if (!m_connected && !m_batchDownloadPhase)
         setProgress(m_statusText);
 }
 
@@ -474,8 +788,8 @@ void TcpController::handleArmCommand(const QString &command)
     if (normalized.contains(QStringLiteral("RUNFINISH"))) {
         if (m_flowState == FlowState::Calibrating) {
             appendLog(QStringLiteral("机械臂标定轨迹执行完成"));
-            if (!publishCollectAction(QStringLiteral("AC_STOP")))
-                failCurrentSlot(QStringLiteral("MQTT 发布 AC_STOP 失败"));
+            if (!publishModelingAction(false))
+                failCurrentSlot(QStringLiteral("无法通知设备停止真实扫描"));
         }
         return;
     }
@@ -493,20 +807,27 @@ void TcpController::handleArmCommand(const QString &command)
             cleanupDeviceConnections();
             setFlowState(FlowState::Aborted, QStringLiteral("任务已中止"));
         } else {
-            if (!m_failureAwaitingPutBack)
+            if (!m_failureAwaitingPutBack
+                && currentSlotState() != QStringLiteral("waiting_download"))
                 markCurrentSuccess();
             QTimer::singleShot(0, this, &TcpController::startNextSlot);
         }
         return;
     }
 
-    if (normalized.contains(QStringLiteral("STARTOK"))
-        && m_flowState == FlowState::Calibrating) {
-        setProgress(QStringLiteral("机械臂正在执行 SLAM 标定轨迹"));
+    if (normalized.contains(QStringLiteral("STARTOK"))) {
+        if (m_flowState == FlowState::Calibrating) {
+            appendLog(QStringLiteral("机械臂已确认启动（STARTOK），SLAM 标定轨迹开始执行"));
+            setFlowState(FlowState::Calibrating,
+                         QStringLiteral("机械臂已确认启动，正在执行 SLAM 标定轨迹"),
+                         kCalibrationTimeoutMs);
+        } else {
+            appendLog(QStringLiteral("收到机械臂 STARTOK，但当前流程不在标定运行阶段，仅记录该响应"));
+        }
         return;
     }
 
-    if (normalized == QStringLiteral("MT,OVER"))
+    if (normalized == QStringLiteral("MT,OVER") && !m_batchDownloadPhase)
         finishTask();
 }
 
@@ -519,6 +840,7 @@ void TcpController::beginTask(const QVariantList &leftSlots, const QVariantList 
     }
 
     m_taskQueue.clear();
+    m_deferredDownloads.clear();
     m_leftSlotStates.clear();
     m_rightSlotStates.clear();
     for (int i = 0; i < 6; ++i) {
@@ -555,9 +877,12 @@ void TcpController::beginTask(const QVariantList &leftSlots, const QVariantList 
     m_successCount = 0;
     m_failureCount = 0;
     m_currentQueueIndex = -1;
+    m_currentDownloadIndex = -1;
     m_taskActive = true;
     m_aborting = false;
     m_failureAwaitingPutBack = false;
+    m_batchDownloadPhase = false;
+    m_armSequenceFinished = false;
     setLastError(QString());
     emit slotStatesChanged();
     emit statisticsChanged();
@@ -582,13 +907,25 @@ void TcpController::abortTask()
     setProgress(QStringLiteral("正在中止任务"));
     appendLog(QStringLiteral("用户请求中止 SLAM 标定任务"));
 
+    if (m_batchDownloadPhase) {
+        cleanupDeviceConnections();
+        m_taskActive = false;
+        m_aborting = false;
+        m_batchDownloadPhase = false;
+        emit armRunningChanged();
+        setFlowState(FlowState::Aborted, QStringLiteral("统一下载任务已中止"));
+        return;
+    }
+
     if (m_mqttConnected
-        && (stateBeforeAbort == FlowState::StartingCollection
+        && (stateBeforeAbort == FlowState::StartingModeling
+            || stateBeforeAbort == FlowState::Preinitializing
+            || stateBeforeAbort == FlowState::StartingCollection
             || stateBeforeAbort == FlowState::Calibrating
             || stateBeforeAbort == FlowState::StoppingCollection
-            || stateBeforeAbort == FlowState::Downloading)) {
-        publishCollectAction(QStringLiteral("AC_STOP"));
-    }
+            || stateBeforeAbort == FlowState::StoppingModeling
+            || stateBeforeAbort == FlowState::Downloading))
+        stopMeasurementBestEffort();
 
     if (stateNeedsPutBack(stateBeforeAbort)) {
         requestPutBack(true);
@@ -611,7 +948,7 @@ void TcpController::startNextSlot()
     cleanupDeviceConnections();
     ++m_currentQueueIndex;
     if (m_currentQueueIndex >= m_taskQueue.size()) {
-        finishTask();
+        beginBatchDownloads();
         return;
     }
 
@@ -632,17 +969,18 @@ void TcpController::startNextSlot()
 void TcpController::finishTask()
 {
     stopStepTimer();
-    if (m_taskActive)
+    if (m_taskActive && !m_armSequenceFinished)
         sendArmCommand(QStringLiteral("$$MT,OVER"));
     m_taskActive = false;
     m_aborting = false;
     m_failureAwaitingPutBack = false;
+    m_batchDownloadPhase = false;
     emit armRunningChanged();
     cleanupDeviceConnections();
     setFlowState(FlowState::Completed,
-                 QStringLiteral("全部标定完成：成功 %1，失败 %2")
+                 QStringLiteral("全部测量与数据下载完成：成功 %1，失败 %2")
                      .arg(m_successCount).arg(m_failureCount));
-    appendLog(QStringLiteral("SLAM 标定任务完成：成功 %1，失败 %2")
+    appendLog(QStringLiteral("SLAM 测量与统一下载任务完成：成功 %1，失败 %2")
                   .arg(m_successCount).arg(m_failureCount));
 }
 
@@ -654,9 +992,22 @@ void TcpController::resetCurrentDevice()
     m_currentVersion.clear();
     m_collectStatus.clear();
     m_collectPath.clear();
+    m_modelingProjectId = -1;
+    m_modelingTaskId = -1;
+    m_modelingStatus = -1;
+    m_modelingActive = false;
+    m_collectActive = false;
+    m_deviceStatusReceived = false;
+    m_deviceInitReady = false;
+    m_retryModelingAfterDeviceReady = false;
+    m_resumeModelingAfterPreinit = false;
+    m_modelingStartRetries = 0;
+    m_collectStartRecoveryAttempts = 0;
+    m_retryCollectAfterStop = false;
     m_ftpLocalDir.clear();
     m_armReceiveBuffer.squeeze();
     m_wifiConnectTicks = 0;
+    m_wifiDisconnectTicks = 0;
     setLastError(QString());
     emit wifiNamePartChanged();
     emit currentDeviceChanged();
@@ -693,10 +1044,135 @@ void TcpController::markCurrentSuccess()
     recordCurrentResult(QStringLiteral("success"));
 }
 
+void TcpController::queueCurrentDownload()
+{
+    if (m_currentQueueIndex < 0 || m_currentQueueIndex >= m_taskQueue.size())
+        return;
+
+    for (const DeferredDownload &download : m_deferredDownloads) {
+        if (download.taskIndex == m_currentQueueIndex)
+            return;
+    }
+
+    m_deferredDownloads.append({m_currentQueueIndex,
+                                m_wifiNamePart,
+                                m_currentSn,
+                                m_currentHardware,
+                                m_currentVersion,
+                                m_collectPath});
+    setCurrentSlotState(QStringLiteral("waiting_download"));
+    m_collectStatus = QStringLiteral("采集已停止，等待统一下载");
+    emit collectStatusChanged();
+    appendLog(QStringLiteral("已加入统一下载队列：%1 %2 号位，SN=%3，目录=%4")
+                  .arg(currentTray()).arg(currentSlot()).arg(m_currentSn, m_collectPath));
+}
+
+void TcpController::beginBatchDownloads()
+{
+    cleanupDeviceConnections();
+    m_batchDownloadPhase = true;
+    m_currentDownloadIndex = -1;
+
+    if (!m_armSequenceFinished) {
+        if (!sendArmCommand(QStringLiteral("$$MT,OVER")))
+            appendLog(QStringLiteral("机械臂结束指令发送失败，但继续统一下载"));
+        m_armSequenceFinished = true;
+    }
+
+    if (m_deferredDownloads.isEmpty()) {
+        appendLog(QStringLiteral("没有等待下载的数据，直接结束任务"));
+        finishTask();
+        return;
+    }
+
+    appendLog(QStringLiteral("全部设备测量和放回完成，开始统一下载 %1 台设备的数据")
+                  .arg(m_deferredDownloads.size()));
+    setFlowState(FlowState::Recovering,
+                 QStringLiteral("全部设备测量完成，准备统一下载 %1 份数据")
+                     .arg(m_deferredDownloads.size()));
+    QTimer::singleShot(0, this, &TcpController::startNextDeferredDownload);
+}
+
+void TcpController::startNextDeferredDownload()
+{
+    if (!m_taskActive || !m_batchDownloadPhase || m_aborting)
+        return;
+
+    cleanupDeviceConnections();
+
+    while (++m_currentDownloadIndex < m_deferredDownloads.size()) {
+        const DeferredDownload &download = m_deferredDownloads.at(m_currentDownloadIndex);
+        m_currentQueueIndex = download.taskIndex;
+        if (currentSlotState() == QStringLiteral("failed")) {
+            appendLog(QStringLiteral("跳过已失败槽位的数据下载：%1 %2 号位")
+                          .arg(currentTray()).arg(currentSlot()));
+            continue;
+        }
+
+        m_wifiNamePart = download.wifiNamePart;
+        m_currentSn = download.sn;
+        m_currentHardware = download.hardware;
+        m_currentVersion = download.version;
+        m_collectPath = download.collectPath;
+        m_collectStatus = QStringLiteral("等待统一下载");
+        m_ftpLocalDir.clear();
+        m_wifiConnectTicks = 0;
+        setLastError(QString());
+        setCurrentSlotState(QStringLiteral("downloading"));
+        emit wifiNamePartChanged();
+        emit currentDeviceChanged();
+        emit collectStatusChanged();
+        emit collectPathChanged();
+
+        setFlowState(FlowState::ConnectingWifi,
+                     QStringLiteral("统一下载 %1/%2：正在连接 %3 的 Wi-Fi")
+                         .arg(m_currentDownloadIndex + 1)
+                         .arg(m_deferredDownloads.size())
+                         .arg(m_currentSn),
+                     kWifiTimeoutMs);
+        appendLog(QStringLiteral("统一下载 %1/%2：%3 %4 号位，SN=%5")
+                      .arg(m_currentDownloadIndex + 1)
+                      .arg(m_deferredDownloads.size())
+                      .arg(currentTray()).arg(currentSlot()).arg(m_currentSn));
+        connectWifiByNamePart(m_wifiNamePart);
+        return;
+    }
+
+    finishTask();
+}
+
+void TcpController::failCurrentDownload(const QString &reason)
+{
+    if (!m_taskActive || !m_batchDownloadPhase)
+        return;
+
+    stopStepTimer();
+    if (m_ftpProcess->state() != QProcess::NotRunning)
+        m_ftpProcess->kill();
+    if (m_ftpDownloading) {
+        m_ftpDownloading = false;
+        emit ftpDownloadingChanged();
+    }
+    m_ftpPhase = 0;
+    m_ftpFiles.clear();
+    setCurrentSlotState(QStringLiteral("failed"));
+    setLastError(reason);
+    recordCurrentResult(QStringLiteral("failed"), reason);
+    setFlowState(FlowState::Recovering,
+                 QStringLiteral("%1 %2 号位下载失败，继续下一台：%3")
+                     .arg(currentTray()).arg(currentSlot()).arg(reason));
+    appendLog(QStringLiteral("统一下载失败，继续下一台: %1").arg(reason));
+    QTimer::singleShot(500, this, &TcpController::startNextDeferredDownload);
+}
+
 void TcpController::failCurrentSlot(const QString &reason)
 {
     if (!m_taskActive)
         return;
+    if (m_batchDownloadPhase) {
+        failCurrentDownload(reason);
+        return;
+    }
     const FlowState failedState = m_flowState;
     stopStepTimer();
     setCurrentSlotState(QStringLiteral("failed"));
@@ -708,11 +1184,14 @@ void TcpController::failCurrentSlot(const QString &reason)
     appendLog(QStringLiteral("当前槽位标定失败: %1").arg(reason));
 
     if (m_mqttConnected
-        && (failedState == FlowState::StartingCollection
+        && (failedState == FlowState::StartingModeling
+            || failedState == FlowState::Preinitializing
+            || failedState == FlowState::StartingCollection
             || failedState == FlowState::Calibrating
             || failedState == FlowState::StoppingCollection
+            || failedState == FlowState::StoppingModeling
             || failedState == FlowState::Downloading)) {
-        publishCollectAction(QStringLiteral("AC_STOP"));
+        stopMeasurementBestEffort();
         setFlowState(FlowState::Recovering, failureProgress);
     }
 
@@ -815,6 +1294,7 @@ bool TcpController::stateNeedsPutBack(FlowState state) const
 {
     return state == FlowState::Calibrating
            || state == FlowState::StoppingCollection
+           || state == FlowState::StoppingModeling
            || state == FlowState::Downloading
            || state == FlowState::WaitingPutBack;
 }
@@ -914,22 +1394,59 @@ bool TcpController::isConnectedToTargetWifi() const
 
 void TcpController::checkWifiConnection()
 {
-    const bool connectedNow = isConnectedToTargetWifi();
-    if (m_wifiConnected != connectedNow) {
-        m_wifiConnected = connectedNow;
-        emit wifiConnectedChanged();
-        appendLog(connectedNow
-                      ? QStringLiteral("设备 Wi-Fi 连接成功: %1").arg(m_wifiNamePart)
-                      : QStringLiteral("目标设备 Wi-Fi 未连接"));
+    const bool detectedNow = isConnectedToTargetWifi();
+    if (detectedNow) {
+        m_wifiDisconnectTicks = 0;
+        if (!m_wifiConnected) {
+            m_wifiConnected = true;
+            emit wifiConnectedChanged();
+            appendLog(QStringLiteral("设备 Wi-Fi 连接成功: %1").arg(m_wifiNamePart));
+        }
+    } else if (m_wifiConnected) {
+        ++m_wifiDisconnectTicks;
+        if (m_wifiDisconnectTicks == 1) {
+            appendLog(QStringLiteral("暂时未检测到目标 Wi-Fi，进入 %1 次检测宽限期")
+                          .arg(kWifiDisconnectGraceTicks));
+        }
+        if (m_wifiDisconnectTicks >= kWifiDisconnectGraceTicks) {
+            m_wifiConnected = false;
+            emit wifiConnectedChanged();
+            appendLog(QStringLiteral("连续 %1 次未检测到目标 Wi-Fi，确认连接已中断")
+                          .arg(kWifiDisconnectGraceTicks));
+        }
     }
+    const bool connectedNow = m_wifiConnected;
 
     if (!m_taskActive)
         return;
 
     if (m_flowState == FlowState::ConnectingWifi) {
         if (connectedNow) {
-            stopStepTimer();
-            connectDeviceTcp();
+            if (m_batchDownloadPhase) {
+                const int scheduledDownloadIndex = m_currentDownloadIndex;
+                setFlowState(FlowState::Downloading,
+                             QStringLiteral("统一下载 %1/%2：Wi-Fi 已连接，等待 FTP 就绪")
+                                 .arg(m_currentDownloadIndex + 1)
+                                 .arg(m_deferredDownloads.size()));
+                appendLog(QStringLiteral("设备 Wi-Fi 已连接，等待网络地址就绪后开始 FTP"));
+                QTimer::singleShot(2500, this, [this, scheduledDownloadIndex]() {
+                    if (!m_taskActive || !m_batchDownloadPhase
+                        || m_currentDownloadIndex != scheduledDownloadIndex
+                        || m_flowState != FlowState::Downloading)
+                        return;
+                    if (!m_wifiConnected) {
+                        failCurrentDownload(QStringLiteral("统一下载前设备 Wi-Fi 已断开"));
+                        return;
+                    }
+                    startFtpDownload();
+                });
+                return;
+            }
+            setFlowState(FlowState::ConnectingDevice,
+                         QStringLiteral("设备 Wi-Fi 已连接，等待网络地址就绪"),
+                         kDeviceConnectTimeoutMs);
+            appendLog(QStringLiteral("等待 DHCP/路由就绪后连接设备信息端口"));
+            m_deviceRetryTimer.start(2500);
         } else {
             ++m_wifiConnectTicks;
             if (m_wifiConnectTicks % 3 == 0)
@@ -939,12 +1456,18 @@ void TcpController::checkWifiConnection()
     }
 
     const bool wifiRequired = m_flowState == FlowState::ConnectingDevice
-                              || m_flowState == FlowState::ReadingDeviceInfo
-                              || m_flowState == FlowState::ConnectingMqtt
-                              || m_flowState == FlowState::StartingCollection
-                              || m_flowState == FlowState::Calibrating
-                              || m_flowState == FlowState::StoppingCollection
-                              || m_flowState == FlowState::Downloading;
+                               || m_flowState == FlowState::ReadingDeviceInfo
+                               || m_flowState == FlowState::ConnectingMqtt
+                               || m_flowState == FlowState::WaitingDeviceReady
+                               || m_flowState == FlowState::CreatingProject
+                               || m_flowState == FlowState::CreatingTask
+                               || m_flowState == FlowState::Preinitializing
+                               || m_flowState == FlowState::StartingModeling
+                               || m_flowState == FlowState::StartingCollection
+                               || m_flowState == FlowState::Calibrating
+                               || m_flowState == FlowState::StoppingCollection
+                               || m_flowState == FlowState::StoppingModeling
+                               || m_flowState == FlowState::Downloading;
     if (wifiRequired && !connectedNow)
         failCurrentSlot(QStringLiteral("设备 Wi-Fi 连接中断"));
 }
@@ -996,13 +1519,23 @@ void TcpController::connectWifiByNamePart(const QString &namePart)
             networkFound = true;
             WLAN_CONNECTION_PARAMETERS parameters = {};
             parameters.dot11BssType = network.dot11BssType;
+            QString generatedProfileName;
             if (!profileName.isEmpty()) {
                 parameters.wlanConnectionMode = wlan_connection_mode_profile;
                 parameters.strProfile = network.strProfileName;
             } else if (network.dot11DefaultAuthAlgorithm == DOT11_AUTH_ALGO_80211_OPEN
                        && network.dot11DefaultCipherAlgorithm == DOT11_CIPHER_ALGO_NONE) {
-                parameters.wlanConnectionMode = wlan_connection_mode_discovery_unsecure;
-                parameters.pDot11Ssid = &network.dot11Ssid;
+                DWORD reasonCode = 0;
+                if (!installOpenWifiProfile(clientHandle, interfaceInfo.InterfaceGuid,
+                                            ssid, &reasonCode)) {
+                    appendLog(QStringLiteral("创建 Wi-Fi 配置失败: %1，原因码: %2")
+                                  .arg(ssid).arg(reasonCode));
+                    continue;
+                }
+                generatedProfileName = ssid;
+                parameters.wlanConnectionMode = wlan_connection_mode_profile;
+                parameters.strProfile = reinterpret_cast<LPCWSTR>(
+                    generatedProfileName.utf16());
             } else {
                 appendLog(QStringLiteral("找到 Wi-Fi“%1”，但没有已保存的密码配置")
                               .arg(profileName.isEmpty() ? ssid : profileName));
@@ -1020,6 +1553,35 @@ void TcpController::connectWifiByNamePart(const QString &namePart)
         WlanFreeMemory(networkList);
     }
 
+    // 扫描列表可能仍是旧缓存。SLAM 热点名称是固定前缀加 SN，
+    // 因此可先创建配置并发起定向连接，让 Windows 驱动自行查找目标热点。
+    if (!networkFound && interfaceList->dwNumberOfItems > 0) {
+        const QString expectedSsid = namePart.startsWith(QStringLiteral("SLAM-"),
+                                                         Qt::CaseInsensitive)
+                                         ? namePart
+                                         : QStringLiteral("SLAM-%1").arg(namePart);
+        const WLAN_INTERFACE_INFO &interfaceInfo = interfaceList->InterfaceInfo[0];
+        DWORD reasonCode = 0;
+        if (installOpenWifiProfile(clientHandle, interfaceInfo.InterfaceGuid,
+                                   expectedSsid, &reasonCode)) {
+            WLAN_CONNECTION_PARAMETERS parameters = {};
+            parameters.wlanConnectionMode = wlan_connection_mode_profile;
+            parameters.strProfile = reinterpret_cast<LPCWSTR>(expectedSsid.utf16());
+            parameters.dot11BssType = dot11_BSS_type_infrastructure;
+            result = WlanConnect(clientHandle, &interfaceInfo.InterfaceGuid,
+                                 &parameters, nullptr);
+            if (result == ERROR_SUCCESS) {
+                networkFound = true;
+                connectStarted = true;
+                appendLog(QStringLiteral("扫描缓存未显示热点，已定向连接: %1")
+                              .arg(expectedSsid));
+            }
+        } else {
+            appendLog(QStringLiteral("创建定向 Wi-Fi 配置失败: %1，原因码: %2")
+                          .arg(expectedSsid).arg(reasonCode));
+        }
+    }
+
     if (!networkFound)
         appendLog(QStringLiteral("未找到名称包含“%1”的 Wi-Fi").arg(namePart));
     else if (!connectStarted)
@@ -1035,17 +1597,24 @@ void TcpController::connectWifiByNamePart(const QString &namePart)
 
 void TcpController::connectDeviceTcp()
 {
+    if (!m_taskActive || !m_wifiConnected
+        || m_flowState != FlowState::ConnectingDevice) {
+        return;
+    }
+    if (m_deviceSocket->state() == QAbstractSocket::ConnectingState
+        || m_deviceSocket->state() == QAbstractSocket::ConnectedState) {
+        return;
+    }
     m_deviceReceiveBuffer.clear();
     m_deviceSocket->abort();
-    setFlowState(FlowState::ConnectingDevice,
-                 QStringLiteral("正在连接设备信息端口 %1:%2")
-                     .arg(m_deviceHost).arg(m_devicePort),
-                 kDeviceConnectTimeoutMs);
+    setProgress(QStringLiteral("正在连接设备信息端口 %1:%2")
+                    .arg(m_deviceHost).arg(m_devicePort));
     m_deviceSocket->connectToHost(m_deviceHost, static_cast<quint16>(m_devicePort));
 }
 
 void TcpController::onDeviceConnected()
 {
+    m_deviceRetryTimer.stop();
     m_deviceTcpConnected = true;
     emit deviceTcpConnectedChanged();
     appendLog(QStringLiteral("设备 TCP 已连接: %1:%2").arg(m_deviceHost).arg(m_devicePort));
@@ -1061,9 +1630,14 @@ void TcpController::onDeviceDisconnected()
         m_deviceTcpConnected = false;
         emit deviceTcpConnectedChanged();
     }
-    if (!m_cleaningUp && m_taskActive
-        && (m_flowState == FlowState::ConnectingDevice
-            || m_flowState == FlowState::ReadingDeviceInfo)) {
+    if (m_cleaningUp || !m_taskActive)
+        return;
+    if (m_flowState == FlowState::ConnectingDevice) {
+        if (!m_deviceRetryTimer.isActive())
+            m_deviceRetryTimer.start(1500);
+        return;
+    }
+    if (m_flowState == FlowState::ReadingDeviceInfo) {
         failCurrentSlot(QStringLiteral("设备信息 TCP 连接断开"));
     }
 }
@@ -1072,9 +1646,15 @@ void TcpController::onDeviceError(QAbstractSocket::SocketError socketError)
 {
     Q_UNUSED(socketError)
     appendLog(QStringLiteral("设备 TCP 错误: %1").arg(m_deviceSocket->errorString()));
-    if (!m_cleaningUp && m_taskActive
-        && (m_flowState == FlowState::ConnectingDevice
-            || m_flowState == FlowState::ReadingDeviceInfo)) {
+    if (m_cleaningUp || !m_taskActive)
+        return;
+    if (m_flowState == FlowState::ConnectingDevice) {
+        appendLog(QStringLiteral("网络尚未就绪，1.5 秒后重试设备 TCP"));
+        if (!m_deviceRetryTimer.isActive())
+            m_deviceRetryTimer.start(1500);
+        return;
+    }
+    if (m_flowState == FlowState::ReadingDeviceInfo) {
         failCurrentSlot(QStringLiteral("无法连接设备信息端口"));
     }
 }
@@ -1204,19 +1784,240 @@ void TcpController::tryCompleteDeviceInfo()
 
 void TcpController::connectMqtt()
 {
+    m_mqttReconnectTimer.stop();
+    m_mqttReconnectAttempts = 0;
+    m_mqttPortCandidateIndex = 0;
+    m_mqttPortFailureCount = 0;
+    m_mqttPort = m_mqttPortCandidates.at(m_mqttPortCandidateIndex);
+    m_mqttClient->setHostname(m_mqttHost);
+    m_mqttClient->setPort(static_cast<quint16>(m_mqttPort));
     setFlowState(FlowState::ConnectingMqtt,
-                 QStringLiteral("正在连接 MQTT 并准备采集"),
-                 kMqttTimeoutMs);
+                  QStringLiteral("正在连接 MQTT %1:%2 并准备真实扫描")
+                      .arg(m_mqttHost).arg(m_mqttPort),
+                  kMqttTimeoutMs);
     if (m_mqttClient->state() == QMqttClient::Connected) {
-        if (!publishCollectAction(QStringLiteral("AC_START")))
-            failCurrentSlot(QStringLiteral("MQTT 发布 AC_START 失败"));
+        if (!m_mqttSubscribed)
+            m_mqttSubscribed = subscribeMqttTopics();
+        if (!m_mqttSubscribed || !publishProjectCreate())
+            failCurrentSlot(QStringLiteral("MQTT 准备扫描工程失败"));
     } else if (m_mqttClient->state() == QMqttClient::Disconnected) {
         m_mqttSubscribed = false;
         m_mqttClient->connectToHost();
     }
 }
 
-bool TcpController::publishCollectAction(const QString &action)
+void TcpController::scheduleMqttReconnect()
+{
+    if (!m_taskActive || m_cleaningUp || !m_wifiConnected
+        || m_mqttClient->state() == QMqttClient::Connected
+        || m_mqttClient->state() == QMqttClient::Connecting
+        || m_mqttReconnectTimer.isActive()) {
+        return;
+    }
+    const int delay = qMin(kMqttReconnectBaseDelayMs
+                               * qMax(1, m_mqttReconnectAttempts + 1),
+                           6000);
+    appendLog(QStringLiteral("MQTT 将在 %1 毫秒后自动重连").arg(delay));
+    m_mqttReconnectTimer.start(delay);
+}
+
+void TcpController::resumeMqttOperation()
+{
+    if (!m_taskActive || m_mqttClient->state() != QMqttClient::Connected
+        || !m_mqttSubscribed) {
+        return;
+    }
+
+    switch (m_flowState) {
+    case FlowState::Preinitializing:
+        if (!publishModelingPreinit())
+            failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送预初始化指令"));
+        break;
+    case FlowState::StartingCollection:
+        if (!publishCollectAction(QStringLiteral("AC_START")))
+            failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送采集启动指令"));
+        break;
+    case FlowState::StartingModeling:
+        if (!publishModelingAction(true))
+            failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送真实扫描指令"));
+        break;
+    case FlowState::StoppingModeling:
+        if (!publishModelingAction(false))
+            failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送停止扫描指令"));
+        break;
+    case FlowState::StoppingCollection:
+        if (!publishCollectAction(QStringLiteral("AC_STOP")))
+            failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送停止采集指令"));
+        break;
+    case FlowState::CreatingProject:
+    case FlowState::CreatingTask:
+        appendLog(QStringLiteral("MQTT 恢复后继续等待之前的 QoS 1 响应"));
+        break;
+    default:
+        // Device status and modeling reports are periodic. Re-subscribing is
+        // sufficient while waiting for readiness or while the arm is moving.
+        break;
+    }
+}
+
+bool TcpController::subscribeMqttTopics()
+{
+    const QVector<QPair<QString, quint8>> topics{
+        {QStringLiteral("slam_app/report/device_status"), 0},
+        {QStringLiteral("slam_app/response/project"), 1},
+        {QStringLiteral("slam_app/response/task"), 1},
+        {QStringLiteral("slam_app/response/modeling"), 1},
+        {QStringLiteral("slam_app/report/modeling"), 0},
+        {QStringLiteral("slam_app/response/data_collect"), 1}
+    };
+
+    bool allSubscribed = true;
+    for (const auto &entry : topics) {
+        QMqttSubscription *subscription = m_mqttClient->subscribe(
+            QMqttTopicFilter(entry.first), entry.second);
+        if (subscription) {
+            appendLog(QStringLiteral("MQTT 已订阅: %1").arg(entry.first));
+        } else {
+            allSubscribed = false;
+            appendLog(QStringLiteral("MQTT 订阅失败: %1").arg(entry.first));
+        }
+    }
+    return allSubscribed;
+}
+
+bool TcpController::publishProjectCreate()
+{
+    if (m_mqttClient->state() != QMqttClient::Connected)
+        return false;
+
+    m_modelingProjectId = -1;
+    m_modelingTaskId = -1;
+    m_modelingStatus = -1;
+    m_modelingActive = false;
+    m_collectActive = false;
+    m_protoSessionId = QStringLiteral("slam-calib-%1-%2")
+                           .arg(m_currentSn.isEmpty() ? QStringLiteral("device") : m_currentSn)
+                           .arg(QDateTime::currentMSecsSinceEpoch());
+
+    QByteArray payload;
+    appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
+    appendProtoUInt(payload, 2, 7); // Application.AC_ADD
+    const QString projectName = QStringLiteral("CAL_%1")
+                                    .arg(QDateTime::currentDateTime().toString(
+                                        QStringLiteral("yyyyMMdd_HHmmss")));
+    appendProtoBytes(payload, 4, projectName.toUtf8());
+    appendProtoBytes(payload, 5, QStringLiteral("SLAM calibration").toUtf8());
+
+    const qint32 messageId = m_mqttClient->publish(
+        QMqttTopicName(QStringLiteral("app_slam/request/project")), payload, 1, false);
+    if (messageId < 0)
+        return false;
+    appendLog(QStringLiteral("MQTT 创建扫描工程 %1，消息 ID=%2")
+                  .arg(projectName).arg(messageId));
+    setFlowState(FlowState::CreatingProject,
+                 QStringLiteral("正在创建设备扫描工程"),
+                 kProjectTimeoutMs);
+    return true;
+}
+
+bool TcpController::publishTaskCreate()
+{
+    if (m_mqttClient->state() != QMqttClient::Connected || m_modelingProjectId <= 0)
+        return false;
+
+    QByteArray payload;
+    appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
+    appendProtoUInt(payload, 2, 7); // Application.AC_ADD
+    appendProtoSInt(payload, 3, m_modelingProjectId);
+    const QString taskName = QStringLiteral("CAL_%1_%2")
+                                 .arg(m_currentSn.isEmpty() ? QStringLiteral("DEVICE") : m_currentSn)
+                                 .arg(QDateTime::currentDateTime().toString(
+                                     QStringLiteral("HHmmss")));
+    appendProtoBytes(payload, 5, taskName.toUtf8());
+    appendProtoBytes(payload, 6, QByteArrayLiteral("simple_qt"));
+
+    const qint32 messageId = m_mqttClient->publish(
+        QMqttTopicName(QStringLiteral("app_slam/request/task")), payload, 1, false);
+    if (messageId < 0)
+        return false;
+    appendLog(QStringLiteral("MQTT 创建扫描任务 %1，工程 ID=%2，消息 ID=%3")
+                  .arg(taskName).arg(m_modelingProjectId).arg(messageId));
+    setFlowState(FlowState::CreatingTask,
+                 QStringLiteral("正在创建设备扫描任务"),
+                 kTaskTimeoutMs);
+    return true;
+}
+
+bool TcpController::publishModelingPreinit()
+{
+    if (m_mqttClient->state() != QMqttClient::Connected || m_modelingTaskId <= 0)
+        return false;
+
+    QByteArray payload;
+    appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
+    appendProtoUInt(payload, 2, 9); // Application.AC_PREINIT
+    appendProtoUInt(payload, 3, static_cast<quint32>(m_modelingTaskId));
+    appendProtoUInt(payload, 4, 2); // RM_RECORD_CALC
+    appendProtoUInt(payload, 5, 0); // MT_HAND
+    if (m_modelingProjectId > 0)
+        appendProtoUInt(payload, 6, static_cast<quint32>(m_modelingProjectId));
+    appendProtoUInt(payload, 7, 0); // Do not wait for Ntrip/RTK initialization.
+
+    const qint32 messageId = m_mqttClient->publish(
+        QMqttTopicName(QStringLiteral("app_slam/request/modeling")), payload, 1, false);
+    if (messageId < 0)
+        return false;
+
+    appendLog(QStringLiteral("MQTT 发布扫描预初始化 AC_PREINIT，任务 ID=%1，母工程 ID=%2，消息 ID=%3")
+                  .arg(m_modelingTaskId).arg(m_modelingProjectId).arg(messageId));
+    setFlowState(FlowState::Preinitializing,
+                 QStringLiteral("设备正在执行扫描预初始化"),
+                 kPreinitTimeoutMs);
+    return true;
+}
+
+bool TcpController::publishModelingAction(bool start, bool updateFlow)
+{
+    if (m_mqttClient->state() != QMqttClient::Connected || m_modelingTaskId <= 0)
+        return false;
+
+    QByteArray payload;
+    appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
+    appendProtoUInt(payload, 2, start ? 1 : 2); // AC_START / AC_STOP
+    appendProtoUInt(payload, 3, static_cast<quint32>(m_modelingTaskId));
+    if (start) {
+        appendProtoUInt(payload, 4, 2); // RM_RECORD_CALC: record and run SLAM
+        appendProtoUInt(payload, 5, 0); // MT_HAND
+        if (m_modelingProjectId > 0)
+            appendProtoUInt(payload, 6, static_cast<quint32>(m_modelingProjectId));
+        appendProtoUInt(payload, 7, 0); // No Ntrip/RTK initialization.
+    }
+
+    const qint32 messageId = m_mqttClient->publish(
+        QMqttTopicName(QStringLiteral("app_slam/request/modeling")), payload, 1, false);
+    if (messageId < 0)
+        return false;
+
+    if (start)
+        m_modelingActive = true; // Also ensures a failed start is stopped best-effort.
+    appendLog(QStringLiteral("MQTT 发布真实扫描 %1，任务 ID=%2，母工程 ID=%3，消息 ID=%4")
+                  .arg(start ? QStringLiteral("AC_START") : QStringLiteral("AC_STOP"))
+                  .arg(m_modelingTaskId).arg(m_modelingProjectId).arg(messageId));
+    if (updateFlow) {
+        if (start) {
+            setFlowState(FlowState::StartingModeling,
+                         QStringLiteral("设备正在启动传感器和 SLAM 扫描"),
+                         kModelingStartTimeoutMs);
+        } else {
+            setFlowState(FlowState::StoppingModeling,
+                         QStringLiteral("设备正在停止扫描并保存工程"),
+                         kModelingStopTimeoutMs);
+        }
+    }
+    return true;
+}
+
+bool TcpController::publishCollectAction(const QString &action, bool updateFlow)
 {
     if (m_mqttClient->state() != QMqttClient::Connected)
         return false;
@@ -1227,21 +2028,83 @@ bool TcpController::publishCollectAction(const QString &action)
     if (messageId < 0)
         return false;
 
+    if (action == QStringLiteral("AC_START"))
+        m_collectActive = true; // Stop it best-effort even if its response is lost.
     appendLog(QStringLiteral("MQTT 发布 %1，消息 ID=%2").arg(action).arg(messageId));
-    if (action == QStringLiteral("AC_START")) {
-        setFlowState(FlowState::StartingCollection,
-                     QStringLiteral("等待设备开始采集"),
-                     kCollectTimeoutMs);
-    } else {
-        setFlowState(FlowState::StoppingCollection,
-                     QStringLiteral("等待设备停止采集"),
-                     kStopCollectTimeoutMs);
+    if (updateFlow) {
+        if (action == QStringLiteral("AC_START")) {
+            setFlowState(FlowState::StartingCollection,
+                         QStringLiteral("正在开启标定原始数据记录"),
+                         kCollectTimeoutMs);
+        } else {
+            setFlowState(FlowState::StoppingCollection,
+                         QStringLiteral("正在停止标定原始数据记录"),
+                         kStopCollectTimeoutMs);
+        }
     }
     return true;
 }
 
+void TcpController::retryCollectStartAfterStop()
+{
+    if (!m_taskActive || !m_retryCollectAfterStop)
+        return;
+
+    m_retryCollectAfterStop = false;
+    m_collectActive = false;
+    if (!m_collectPath.isEmpty()) {
+        m_collectPath.clear();
+        emit collectPathChanged();
+    }
+    m_collectStatus = QStringLiteral("旧采集会话已停止，准备重试");
+    emit collectStatusChanged();
+    setFlowState(FlowState::Recovering,
+                 QStringLiteral("已释放设备残留采集会话，正在重试创建采集目录"));
+
+    QTimer::singleShot(1200, this, [this]() {
+        if (!m_taskActive || m_batchDownloadPhase
+            || m_flowState != FlowState::Recovering) {
+            return;
+        }
+        appendLog(QStringLiteral("重试当前槽位的标定原始数据采集 AC_START（%1/1）")
+                      .arg(m_collectStartRecoveryAttempts));
+        if (!publishCollectAction(QStringLiteral("AC_START")))
+            failCurrentSlot(QStringLiteral("释放残留采集会话后无法重试 AC_START"));
+    });
+}
+
+void TcpController::stopMeasurementBestEffort()
+{
+    if (m_mqttClient->state() != QMqttClient::Connected)
+        return;
+    if (m_collectActive)
+        publishCollectAction(QStringLiteral("AC_STOP"), false);
+    if (m_modelingActive)
+        publishModelingAction(false, false);
+}
+
 void TcpController::handleMqttMessage(const QByteArray &message, const QString &topic)
 {
+    if (topic == QStringLiteral("slam_app/report/device_status")) {
+        handleDeviceStatusReport(message);
+        return;
+    }
+    if (topic == QStringLiteral("slam_app/response/project")) {
+        handleProjectResponse(message);
+        return;
+    }
+    if (topic == QStringLiteral("slam_app/response/task")) {
+        handleTaskResponse(message);
+        return;
+    }
+    if (topic == QStringLiteral("slam_app/response/modeling")) {
+        handleModelingResponse(message);
+        return;
+    }
+    if (topic == QStringLiteral("slam_app/report/modeling")) {
+        handleModelingReport(message);
+        return;
+    }
     if (topic != QStringLiteral("slam_app/response/data_collect"))
         return;
     appendLog(QStringLiteral("MQTT 收到采集响应: %1").arg(QString::fromUtf8(message)));
@@ -1262,41 +2125,347 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
         emit collectPathChanged();
     }
 
-    if (errorCode != 0) {
-        m_collectStatus = QStringLiteral("采集异常");
+    const bool alreadyCollecting = description.contains(QStringLiteral("already active"),
+                                                          Qt::CaseInsensitive);
+
+    const bool collectDirectoryFailure = errorCode == 3
+                                         && description.contains(QStringLiteral("collect dir"),
+                                                                 Qt::CaseInsensitive);
+    if (m_flowState == FlowState::StartingCollection
+        && collectDirectoryFailure
+        && m_collectStartRecoveryAttempts < 1) {
+        stopStepTimer();
+        ++m_collectStartRecoveryAttempts;
+        m_retryCollectAfterStop = true;
+        m_collectStatus = QStringLiteral("正在释放残留采集会话");
         emit collectStatusChanged();
-        failCurrentSlot(QStringLiteral("设备采集失败，错误码 %1").arg(errorCode));
+        appendLog(QStringLiteral("设备创建采集目录失败；先发送 AC_STOP 释放残留会话，再自动重试一次"));
+        if (!publishCollectAction(QStringLiteral("AC_STOP"))) {
+            m_retryCollectAfterStop = false;
+            failCurrentSlot(QStringLiteral("设备采集目录创建失败，且无法发送残留会话清理指令"));
+        }
         return;
     }
 
-    if (description.compare(QStringLiteral("collecting"), Qt::CaseInsensitive) == 0) {
+    if (m_flowState == FlowState::StoppingCollection
+        && m_retryCollectAfterStop
+        && errorCode == 2) {
+        appendLog(QStringLiteral("设备回复当前没有活动采集会话，直接重试创建采集目录"));
+        retryCollectStartAfterStop();
+        return;
+    }
+
+    if (errorCode != 0 && !alreadyCollecting) {
+        m_collectStatus = QStringLiteral("采集异常");
+        emit collectStatusChanged();
+        if (m_flowState == FlowState::StartingCollection
+            || m_flowState == FlowState::StoppingCollection) {
+            failCurrentSlot(QStringLiteral("设备采集失败，错误码 %1：%2")
+                                .arg(errorCode).arg(description));
+        }
+        return;
+    }
+
+    if (description.compare(QStringLiteral("collecting"), Qt::CaseInsensitive) == 0
+        || alreadyCollecting) {
         m_collectStatus = QStringLiteral("采集中");
+        m_collectActive = true;
         emit collectStatusChanged();
         if (m_flowState == FlowState::StartingCollection) {
             stopStepTimer();
-            if (!sendArmCommand(QStringLiteral("$$MT,START"))) {
-                failCurrentSlot(QStringLiteral("无法通知机械臂开始标定"));
-                return;
-            }
-            setFlowState(FlowState::Calibrating,
-                         QStringLiteral("机械臂正在执行 SLAM 标定轨迹"),
-                         kCalibrationTimeoutMs);
+            if (alreadyCollecting)
+                appendLog(QStringLiteral("设备已处于采集状态，按幂等成功继续流程"));
+            if (!publishModelingAction(true))
+                failCurrentSlot(QStringLiteral("标定记录启动后无法启动设备真实扫描"));
         }
         return;
     }
 
     if (description.compare(QStringLiteral("collect stopped"), Qt::CaseInsensitive) == 0) {
         m_collectStatus = QStringLiteral("采集已停止");
+        m_collectActive = false;
         emit collectStatusChanged();
         if (m_flowState == FlowState::StoppingCollection) {
             stopStepTimer();
-            startFtpDownload();
+            if (m_retryCollectAfterStop) {
+                appendLog(QStringLiteral("设备残留采集会话已停止，旧目录=%1")
+                              .arg(path.isEmpty() ? QStringLiteral("--") : path));
+                retryCollectStartAfterStop();
+                return;
+            }
+            queueCurrentDownload();
+            requestPutBack(false);
         }
         return;
     }
 
     m_collectStatus = description.isEmpty() ? QStringLiteral("未知状态") : description;
     emit collectStatusChanged();
+}
+
+void TcpController::handleDeviceStatusReport(const QByteArray &message)
+{
+    quint64 rawReady = 0;
+    if (!protoVarintField(message, 4, rawReady))
+        return;
+
+    const bool ready = rawReady != 0;
+    const bool changed = !m_deviceStatusReceived || ready != m_deviceInitReady;
+    m_deviceStatusReceived = true;
+    m_deviceInitReady = ready;
+    if (changed) {
+        appendLog(ready
+                      ? QStringLiteral("设备初始化状态: init_ready=1，可以启动扫描")
+                      : QStringLiteral("设备初始化状态: init_ready=0，继续等待预初始化完成"));
+    }
+
+    const ProtoError statusError = parseProtoErrorAt(message, 5);
+    if (statusError.code != 0 && !protoSucceeded(statusError) && changed) {
+        appendLog(QStringLiteral("设备状态附带错误 0x%1：%2")
+                      .arg(statusError.code, 8, 16, QLatin1Char('0'))
+                      .arg(statusError.description));
+    }
+
+    if (!m_taskActive || m_flowState != FlowState::WaitingDeviceReady)
+        return;
+    if (!ready) {
+        setProgress(QStringLiteral("设备正在完成预初始化，完成后自动继续"));
+        return;
+    }
+
+    stopStepTimer();
+    const bool retryModeling = m_retryModelingAfterDeviceReady;
+    m_retryModelingAfterDeviceReady = false;
+    setProgress(retryModeling
+                    ? QStringLiteral("设备已重新就绪，准备重试真实扫描")
+                    : QStringLiteral("设备初始化完成，准备创建扫描工程"));
+    QTimer::singleShot(300, this, [this, retryModeling]() {
+        if (!m_taskActive || m_flowState != FlowState::WaitingDeviceReady
+            || m_mqttClient->state() != QMqttClient::Connected) {
+            return;
+        }
+        if (retryModeling) {
+            appendLog(QStringLiteral("设备恢复 init_ready=1，自动重试真实扫描"));
+            if (!publishModelingAction(true))
+                failCurrentSlot(QStringLiteral("设备恢复就绪后无法重试真实扫描"));
+        } else if (!publishProjectCreate()) {
+            failCurrentSlot(QStringLiteral("设备初始化完成后无法创建扫描工程"));
+        }
+    });
+}
+
+void TcpController::handleProjectResponse(const QByteArray &message)
+{
+    if (!m_taskActive || m_flowState != FlowState::CreatingProject)
+        return;
+    const ProtoError error = parseProtoError(message);
+    if (!protoSucceeded(error)) {
+        failCurrentSlot(QStringLiteral("创建扫描工程失败，错误码 0x%1：%2")
+                            .arg(error.code, 8, 16, QLatin1Char('0'))
+                            .arg(error.description));
+        return;
+    }
+
+    QByteArray project;
+    quint64 encodedId = 0;
+    if (!protoBytesField(message, 4, project)
+        || !protoVarintField(project, 1, encodedId)) {
+        failCurrentSlot(QStringLiteral("创建扫描工程响应缺少工程 ID"));
+        return;
+    }
+    m_modelingProjectId = static_cast<qint32>(decodeProtoSInt(encodedId));
+    if (m_modelingProjectId <= 0) {
+        failCurrentSlot(QStringLiteral("设备返回了无效的扫描工程 ID"));
+        return;
+    }
+    appendLog(QStringLiteral("扫描工程创建成功，ID=%1").arg(m_modelingProjectId));
+    if (!publishTaskCreate())
+        failCurrentSlot(QStringLiteral("MQTT 创建扫描任务失败"));
+}
+
+void TcpController::handleTaskResponse(const QByteArray &message)
+{
+    if (!m_taskActive || m_flowState != FlowState::CreatingTask)
+        return;
+    const ProtoError error = parseProtoError(message);
+    if (!protoSucceeded(error)) {
+        failCurrentSlot(QStringLiteral("创建扫描任务失败，错误码 0x%1：%2")
+                            .arg(error.code, 8, 16, QLatin1Char('0'))
+                            .arg(error.description));
+        return;
+    }
+
+    quint64 encodedId = 0;
+    if (!protoVarintField(message, 3, encodedId)) {
+        failCurrentSlot(QStringLiteral("创建扫描任务响应缺少任务 ID"));
+        return;
+    }
+    m_modelingTaskId = static_cast<qint32>(decodeProtoSInt(encodedId));
+    if (m_modelingTaskId <= 0) {
+        failCurrentSlot(QStringLiteral("设备返回了无效的扫描任务 ID"));
+        return;
+    }
+    appendLog(QStringLiteral("扫描任务创建成功，ID=%1").arg(m_modelingTaskId));
+    m_resumeModelingAfterPreinit = false;
+    if (!publishModelingPreinit())
+        failCurrentSlot(QStringLiteral("扫描任务创建后无法执行设备预初始化"));
+}
+
+void TcpController::handleModelingResponse(const QByteArray &message)
+{
+    if (!m_taskActive)
+        return;
+    const ProtoError error = parseProtoError(message);
+    quint64 rawAction = 0;
+    const bool hasAction = protoVarintField(message, 3, rawAction);
+    appendLog(QStringLiteral("MQTT 收到扫描控制响应，动作=%1，错误码=0x%2，说明=%3")
+                  .arg(hasAction ? QString::number(rawAction) : QStringLiteral("--"))
+                  .arg(error.code, 8, 16, QLatin1Char('0'))
+                  .arg(error.description.isEmpty() ? QStringLiteral("--") : error.description));
+
+    if (m_flowState == FlowState::Preinitializing) {
+        if (hasAction && (rawAction == 1 || rawAction == 2)) {
+            appendLog(QStringLiteral("忽略预初始化阶段收到的旧扫描响应，动作=%1")
+                          .arg(rawAction));
+            return;
+        }
+        if (!protoSucceeded(error) && error.code == 0x32040004u) {
+            stopStepTimer();
+            const bool resumeModeling = m_resumeModelingAfterPreinit;
+            m_resumeModelingAfterPreinit = false;
+            appendLog(QStringLiteral("当前固件不接受独立 AC_PREINIT，切换为携带母工程 ID 的兼容启动方式"));
+            if (resumeModeling) {
+                if (!publishModelingAction(true))
+                    failCurrentSlot(QStringLiteral("预初始化兼容模式无法重试真实扫描"));
+            } else if (!publishCollectAction(QStringLiteral("AC_START"))) {
+                failCurrentSlot(QStringLiteral("预初始化兼容模式无法开启原始数据记录"));
+            }
+            return;
+        }
+        if (!protoSucceeded(error)) {
+            failCurrentSlot(QStringLiteral("设备扫描预初始化失败，错误码 0x%1：%2")
+                                .arg(error.code, 8, 16, QLatin1Char('0'))
+                                .arg(error.description));
+            return;
+        }
+
+        stopStepTimer();
+        const bool resumeModeling = m_resumeModelingAfterPreinit;
+        m_resumeModelingAfterPreinit = false;
+        appendLog(QStringLiteral("设备扫描预初始化 AC_PREINIT 成功"));
+        if (resumeModeling) {
+            if (!publishModelingAction(true))
+                failCurrentSlot(QStringLiteral("预初始化成功后无法重试真实扫描"));
+        } else if (!publishCollectAction(QStringLiteral("AC_START"))) {
+            failCurrentSlot(QStringLiteral("预初始化成功后无法开启标定原始数据记录"));
+        }
+        return;
+    }
+
+    const bool preinitRequired = error.description.contains(QStringLiteral("preinit"),
+                                                             Qt::CaseInsensitive)
+                                 && error.description.contains(QStringLiteral("required"),
+                                                               Qt::CaseInsensitive);
+    if (!protoSucceeded(error) && preinitRequired
+        && m_flowState == FlowState::StartingModeling
+        && m_modelingStartRetries < 2) {
+        ++m_modelingStartRetries;
+        m_modelingActive = false;
+        m_resumeModelingAfterPreinit = true;
+        appendLog(QStringLiteral("设备要求显式预初始化，本槽位不判失败；执行 AC_PREINIT 后第 %1 次重试")
+                      .arg(m_modelingStartRetries));
+        if (!publishModelingPreinit())
+            failCurrentSlot(QStringLiteral("设备要求预初始化，但 AC_PREINIT 发送失败"));
+        return;
+    }
+
+    const bool alreadyModeling = error.description.contains(QStringLiteral("already active"),
+                                                             Qt::CaseInsensitive);
+    if (!protoSucceeded(error)
+        && !alreadyModeling
+        && (m_flowState == FlowState::StartingModeling
+            || m_flowState == FlowState::StoppingModeling)) {
+        failCurrentSlot(QStringLiteral("设备扫描控制失败，错误码 0x%1：%2")
+                            .arg(error.code, 8, 16, QLatin1Char('0'))
+                            .arg(error.description));
+        return;
+    }
+
+    if (m_flowState == FlowState::StartingModeling) {
+        if (alreadyModeling)
+            appendLog(QStringLiteral("设备已处于真实扫描启动流程，按幂等成功继续等待状态上报"));
+        setProgress(QStringLiteral("设备已接受扫描指令，等待传感器真正启动"));
+    } else if (m_flowState == FlowState::StoppingModeling) {
+        setProgress(QStringLiteral("设备已接受停止指令，等待扫描数据保存完成"));
+    }
+}
+
+void TcpController::handleModelingReport(const QByteArray &message)
+{
+    if (!m_taskActive)
+        return;
+    quint64 rawStatus = 0;
+    if (!protoVarintField(message, 4, rawStatus))
+        return;
+    const int status = static_cast<int>(rawStatus);
+    const ProtoError error = parseProtoErrorAt(message, 6);
+    if (status != m_modelingStatus) {
+        m_modelingStatus = status;
+        appendLog(QStringLiteral("设备扫描状态变化: %1，错误码=0x%2")
+                      .arg(status)
+                      .arg(error.code, 8, 16, QLatin1Char('0')));
+    }
+
+    if (status == 8 || status == 9) {
+        m_modelingActive = false;
+        if (m_flowState == FlowState::StartingModeling
+            || m_flowState == FlowState::StartingCollection
+            || m_flowState == FlowState::Calibrating
+            || m_flowState == FlowState::StoppingCollection
+            || m_flowState == FlowState::StoppingModeling) {
+            failCurrentSlot(QStringLiteral("设备真实扫描异常，状态 %1，错误码 0x%2：%3")
+                                .arg(status)
+                                .arg(error.code, 8, 16, QLatin1Char('0'))
+                                .arg(error.description));
+        }
+        return;
+    }
+
+    if (m_flowState == FlowState::StartingModeling) {
+        if (status == 1)
+            setProgress(QStringLiteral("设备正在进行扫描前自检"));
+        else if (status == 2)
+            setProgress(QStringLiteral("设备扫描模块已就绪，等待静止初始化"));
+        else if (status == 3)
+            setProgress(QStringLiteral("设备正在打开传感器"));
+        else if (status == 4)
+            setProgress(QStringLiteral("设备正在初始化 SLAM 算法"));
+        else if (status == 5) {
+            stopStepTimer();
+            m_modelingActive = true;
+            appendLog(QStringLiteral("设备已进入 EC_ScanScanning，传感器已真实启动"));
+            if (!sendArmCommand(QStringLiteral("$$MT,START"))) {
+                failCurrentSlot(QStringLiteral("无法通知机械臂开始标定"));
+                return;
+            }
+            setFlowState(FlowState::Calibrating,
+                         QStringLiteral("设备正在真实扫描，机械臂正在执行 SLAM 标定轨迹"),
+                         kCalibrationTimeoutMs);
+        }
+        return;
+    }
+
+    if (m_flowState == FlowState::StoppingModeling) {
+        if (status == 6) {
+            setProgress(QStringLiteral("设备正在保存扫描工程"));
+        } else if (status == 7) {
+            stopStepTimer();
+            m_modelingActive = false;
+            appendLog(QStringLiteral("设备真实扫描已完成并保存"));
+            if (!publishCollectAction(QStringLiteral("AC_STOP")))
+                failCurrentSlot(QStringLiteral("真实扫描完成后无法停止标定数据记录"));
+        }
+    }
 }
 
 void TcpController::startFtpDownload()
@@ -1318,11 +2487,16 @@ void TcpController::startFtpDownload()
         return;
     }
 
-    QString remotePath = m_collectPath;
+    QString remotePath = QDir::fromNativeSeparators(m_collectPath);
+    const QString collectMarker = QStringLiteral("/collect/");
+    const int collectPosition = remotePath.indexOf(collectMarker);
+    if (collectPosition >= 0)
+        remotePath = remotePath.mid(collectPosition);
     if (!remotePath.startsWith(QLatin1Char('/')))
         remotePath.prepend(QLatin1Char('/'));
     if (!remotePath.endsWith(QLatin1Char('/')))
         remotePath.append(QLatin1Char('/'));
+    appendLog(QStringLiteral("FTP 路径映射: %1 -> %2").arg(m_collectPath, remotePath));
     m_ftpUrl.setHost(m_deviceHost);
     m_ftpUrl.setPort(21);
     m_ftpUrl.setPath(remotePath);
@@ -1429,13 +2603,19 @@ void TcpController::startNextFtpFile()
               << QStringLiteral("--show-error")
               << QStringLiteral("--silent")
               << QStringLiteral("--connect-timeout") << QStringLiteral("10")
-              << QStringLiteral("--max-time") << QStringLiteral("300")
+              << QStringLiteral("--max-time") << QStringLiteral("1800")
+              << QStringLiteral("--speed-limit") << QStringLiteral("1024")
+              << QStringLiteral("--speed-time") << QStringLiteral("60")
+              << QStringLiteral("--retry") << QStringLiteral("5")
+              << QStringLiteral("--retry-delay") << QStringLiteral("3")
+              << QStringLiteral("--retry-all-errors")
+              << QStringLiteral("--continue-at") << QStringLiteral("-")
               << QStringLiteral("--ftp-pasv")
               << QStringLiteral("--user")
               << QStringLiteral("%1:%2").arg(m_ftpUser, m_ftpPassword)
               << QStringLiteral("--output") << localFile
               << QString::fromUtf8(fileUrl.toEncoded());
-    appendLog(QStringLiteral("下载 FTP 文件: %1").arg(fileName));
+    appendLog(QStringLiteral("下载 FTP 文件（支持断点续传）: %1").arg(fileName));
     m_ftpProcess->start(m_curlExecutable, arguments);
 }
 
@@ -1445,6 +2625,13 @@ void TcpController::finishFtpDownload()
     m_ftpPhase = 0;
     emit ftpDownloadingChanged();
     appendLog(QStringLiteral("FTP 数据下载完成: %1").arg(m_ftpLocalDir));
+    if (m_batchDownloadPhase) {
+        m_collectStatus = QStringLiteral("数据下载完成");
+        emit collectStatusChanged();
+        markCurrentSuccess();
+        QTimer::singleShot(0, this, &TcpController::startNextDeferredDownload);
+        return;
+    }
     requestPutBack(false);
 }
 
@@ -1460,6 +2647,7 @@ void TcpController::onStepTimeout()
         failCurrentSlot(QStringLiteral("连接设备 Wi-Fi 超时"));
         break;
     case FlowState::ConnectingDevice:
+        m_deviceRetryTimer.stop();
         failCurrentSlot(QStringLiteral("连接设备信息端口超时"));
         break;
     case FlowState::ReadingDeviceInfo:
@@ -1467,6 +2655,21 @@ void TcpController::onStepTimeout()
         break;
     case FlowState::ConnectingMqtt:
         failCurrentSlot(QStringLiteral("连接 MQTT 超时"));
+        break;
+    case FlowState::WaitingDeviceReady:
+        failCurrentSlot(QStringLiteral("设备预初始化未在规定时间内完成（init_ready 仍为 0）"));
+        break;
+    case FlowState::CreatingProject:
+        failCurrentSlot(QStringLiteral("创建设备扫描工程超时"));
+        break;
+    case FlowState::CreatingTask:
+        failCurrentSlot(QStringLiteral("创建设备扫描任务超时"));
+        break;
+    case FlowState::Preinitializing:
+        failCurrentSlot(QStringLiteral("等待设备扫描预初始化超时"));
+        break;
+    case FlowState::StartingModeling:
+        failCurrentSlot(QStringLiteral("等待设备传感器进入真实扫描超时"));
         break;
     case FlowState::StartingCollection:
         failCurrentSlot(QStringLiteral("等待设备开始采集超时"));
@@ -1476,6 +2679,9 @@ void TcpController::onStepTimeout()
         break;
     case FlowState::StoppingCollection:
         failCurrentSlot(QStringLiteral("等待设备停止采集超时"));
+        break;
+    case FlowState::StoppingModeling:
+        failCurrentSlot(QStringLiteral("等待设备停止扫描并保存工程超时"));
         break;
     case FlowState::WaitingPutBack:
         setCurrentSlotState(QStringLiteral("failed"));
@@ -1541,6 +2747,8 @@ void TcpController::stopStepTimer()
 void TcpController::cleanupDeviceConnections()
 {
     m_cleaningUp = true;
+    m_deviceRetryTimer.stop();
+    m_mqttReconnectTimer.stop();
     if (m_ftpDownloading) {
         m_ftpDownloading = false;
         emit ftpDownloadingChanged();
@@ -1564,11 +2772,21 @@ void TcpController::cleanupDeviceConnections()
         emit mqttConnectedChanged();
     }
     m_mqttSubscribed = false;
+    m_mqttPortFailureCount = 0;
+    m_mqttReconnectAttempts = 0;
+    m_modelingActive = false;
+    m_collectActive = false;
+    m_modelingStatus = -1;
+    m_deviceStatusReceived = false;
+    m_deviceInitReady = false;
+    m_retryModelingAfterDeviceReady = false;
+    m_resumeModelingAfterPreinit = false;
 
     if (m_wifiConnected) {
         m_wifiConnected = false;
         emit wifiConnectedChanged();
     }
+    m_wifiDisconnectTicks = 0;
     m_cleaningUp = false;
 }
 

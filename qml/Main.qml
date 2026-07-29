@@ -69,6 +69,8 @@ ApplicationWindow {
         if (state === "failed") return "#fee2e2"
         if (state === "success") return "#dcfce7"
         if (state === "running") return "#ffedd5"
+        if (state === "downloading") return "#e0f2fe"
+        if (state === "waiting_download") return "#f3e8ff"
         if (state === "pending" || state === "selected") return "#dbeafe"
         return "#ffffff"
     }
@@ -77,6 +79,8 @@ ApplicationWindow {
         if (state === "failed") return "#dc2626"
         if (state === "success") return "#16a34a"
         if (state === "running") return "#f97316"
+        if (state === "downloading") return "#0284c7"
+        if (state === "waiting_download") return "#9333ea"
         if (state === "pending" || state === "selected") return primaryColor
         return "#cbd5e1"
     }
@@ -85,6 +89,8 @@ ApplicationWindow {
         if (state === "failed") return "#b91c1c"
         if (state === "success") return "#15803d"
         if (state === "running") return "#c2410c"
+        if (state === "downloading") return "#0369a1"
+        if (state === "waiting_download") return "#7e22ce"
         if (state === "pending" || state === "selected") return primaryColor
         return textColor
     }

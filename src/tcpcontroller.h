@@ -133,9 +133,15 @@ private:
         ConnectingDevice,
         ReadingDeviceInfo,
         ConnectingMqtt,
+        WaitingDeviceReady,
+        CreatingProject,
+        CreatingTask,
+        Preinitializing,
+        StartingModeling,
         StartingCollection,
         Calibrating,
         StoppingCollection,
+        StoppingModeling,
         Downloading,
         WaitingPutBack,
         Recovering,
@@ -146,6 +152,15 @@ private:
     struct SlotTarget {
         bool left;
         int slot;
+    };
+
+    struct DeferredDownload {
+        int taskIndex;
+        QString wifiNamePart;
+        QString sn;
+        QString hardware;
+        QString version;
+        QString collectPath;
     };
 
     void setProgress(const QString &text);
@@ -166,6 +181,10 @@ private:
     QString currentSlotState() const;
     void markCurrentSuccess();
     void failCurrentSlot(const QString &reason);
+    void queueCurrentDownload();
+    void beginBatchDownloads();
+    void startNextDeferredDownload();
+    void failCurrentDownload(const QString &reason);
     void recordCurrentResult(const QString &result, const QString &reason = QString());
     bool stateNeedsPutBack(FlowState state) const;
     void requestPutBack(bool afterFailure);
@@ -180,8 +199,22 @@ private:
     void tryCompleteDeviceInfo();
 
     void connectMqtt();
-    bool publishCollectAction(const QString &action);
+    void scheduleMqttReconnect();
+    void resumeMqttOperation();
+    bool subscribeMqttTopics();
+    bool publishProjectCreate();
+    bool publishTaskCreate();
+    bool publishModelingPreinit();
+    bool publishModelingAction(bool start, bool updateFlow = true);
+    bool publishCollectAction(const QString &action, bool updateFlow = true);
+    void retryCollectStartAfterStop();
+    void stopMeasurementBestEffort();
     void handleMqttMessage(const QByteArray &message, const QString &topic);
+    void handleProjectResponse(const QByteArray &message);
+    void handleTaskResponse(const QByteArray &message);
+    void handleDeviceStatusReport(const QByteArray &message);
+    void handleModelingResponse(const QByteArray &message);
+    void handleModelingReport(const QByteArray &message);
 
     void startFtpDownload();
     void handleFtpProcessFinished(int exitCode, int exitStatus);
@@ -199,6 +232,8 @@ private:
     QProcess *m_ftpProcess;
 
     QTimer m_wifiStatusTimer;
+    QTimer m_deviceRetryTimer;
+    QTimer m_mqttReconnectTimer;
     QTimer m_handshakeTimer;
     QTimer m_stepTimer;
 
@@ -213,6 +248,8 @@ private:
     bool m_failureAwaitingPutBack;
     bool m_aborting;
     bool m_cleaningUp;
+    bool m_batchDownloadPhase;
+    bool m_armSequenceFinished;
 
     QString m_statusText;
     QString m_currentProgress;
@@ -223,11 +260,14 @@ private:
     QByteArray m_deviceReceiveBuffer;
     int m_handshakeAttempts;
     int m_wifiConnectTicks;
+    int m_wifiDisconnectTicks;
 
     FlowState m_flowState;
     QVector<SlotTarget> m_taskQueue;
     QVector<bool> m_resultRecorded;
+    QVector<DeferredDownload> m_deferredDownloads;
     int m_currentQueueIndex;
+    int m_currentDownloadIndex;
     QStringList m_leftSlotStates;
     QStringList m_rightSlotStates;
     int m_selectedCount;
@@ -244,6 +284,24 @@ private:
     int m_devicePort;
     QString m_mqttHost;
     int m_mqttPort;
+    QVector<int> m_mqttPortCandidates;
+    int m_mqttPortCandidateIndex;
+    int m_mqttPortFailureCount;
+    int m_mqttReconnectAttempts;
+    quint32 m_protoSequence;
+    QString m_protoSessionId;
+    qint32 m_modelingProjectId;
+    qint32 m_modelingTaskId;
+    int m_modelingStatus;
+    bool m_modelingActive;
+    bool m_collectActive;
+    bool m_deviceStatusReceived;
+    bool m_deviceInitReady;
+    bool m_retryModelingAfterDeviceReady;
+    bool m_resumeModelingAfterPreinit;
+    int m_modelingStartRetries;
+    int m_collectStartRecoveryAttempts;
+    bool m_retryCollectAfterStop;
 
     QUrl m_ftpUrl;
     QString m_ftpUser;
