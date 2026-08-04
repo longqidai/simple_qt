@@ -18,6 +18,23 @@ ApplicationWindow {
     readonly property color borderColor: "#dfe5ee"
     property bool logExpanded: false
     property int selectionRevision: 0
+    property bool closeAfterSafeStop: false
+
+    onClosing: {
+        if (!closeAfterSafeStop && tcpController.armRunning) {
+            close.accepted = false
+            closeAfterSafeStop = true
+            tcpController.toggleArmTask([], [])
+        }
+    }
+
+    Connections {
+        target: tcpController
+        onArmRunningChanged: {
+            if (window.closeAfterSafeStop && !tcpController.armRunning)
+                window.close()
+        }
+    }
 
     ListModel {
         id: leftSelection

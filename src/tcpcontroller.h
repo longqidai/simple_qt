@@ -139,9 +139,11 @@ private:
         Preinitializing,
         StartingModeling,
         StartingCollection,
+        WaitingArmHome,
         Calibrating,
         StoppingCollection,
         StoppingModeling,
+        EnsuringMeasurementStopped,
         Downloading,
         WaitingPutBack,
         Recovering,
@@ -207,8 +209,13 @@ private:
     bool publishModelingPreinit();
     bool publishModelingAction(bool start, bool updateFlow = true);
     bool publishCollectAction(const QString &action, bool updateFlow = true);
+    void tryStartModelingWhenArmHome();
     void retryCollectStartAfterStop();
-    void stopMeasurementBestEffort();
+    bool measurementMayBeActive() const;
+    void beginGuaranteedMeasurementStop(bool afterAbort, bool needsPutBack,
+                                        const QString &reason);
+    void continueGuaranteedMeasurementStop();
+    void finishGuaranteedMeasurementStop();
     void handleMqttMessage(const QByteArray &message, const QString &topic);
     void handleProjectResponse(const QByteArray &message);
     void handleTaskResponse(const QByteArray &message);
@@ -250,6 +257,15 @@ private:
     bool m_cleaningUp;
     bool m_batchDownloadPhase;
     bool m_armSequenceFinished;
+    bool m_armMotionStarted;
+    bool m_armMotionFinished;
+    bool m_armAtHomeReady;
+    bool m_collectReadyForModeling;
+    bool m_guaranteedStopActive;
+    bool m_guaranteedStopAfterAbort;
+    bool m_guaranteedStopNeedsPutBack;
+    int m_guaranteedStopAttempts;
+    QString m_guaranteedStopReason;
 
     QString m_statusText;
     QString m_currentProgress;
