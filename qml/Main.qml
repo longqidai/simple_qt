@@ -187,6 +187,7 @@ ApplicationWindow {
                         }
                         Button {
                             Layout.preferredWidth: 132
+                            enabled: !tcpController.armRunning
                             text: tcpController.connected ? qsTr("断开连接") : qsTr("连接机械臂")
                             onClicked: tcpController.toggleConnection()
                         }

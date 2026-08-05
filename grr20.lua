@@ -86,8 +86,11 @@ local function initializeGripper()
   -- 调用本函数前工具已下降到安全释放高度，因此即使夹有设备也不会高处掉落。
   SetHoldRegs(gripperId, 1001, 1, {0}, "U16")
   SetHoldRegs(gripperId, 1002, 2, {65535}, "U32")
-  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  -- 参数写入后必须给夹爪控制器留出锁存时间。旧版已验证程序也是
+  -- 先等待再写执行寄存器；连续写入在带负载时可能仍按旧目标动作。
   Wait(2000)
+  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  Wait(3000)
   -- 第五步：机械爪初始化完成，允许后续执行夹取动作。
   trace("Gripper ready")
   return true
@@ -98,9 +101,11 @@ local function closeGripper()
   SetHoldRegs(gripperId, 1001, 1, {65280}, "U16")
   -- 第二步：设置最大允许夹持力。
   SetHoldRegs(gripperId, 1002, 2, {65535}, "U32")
-  -- 第三步：发送执行命令并等待机械爪闭合稳定。
-  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  -- 第三步：等待位置和力参数被控制器锁存。不能与执行命令连续写入。
   Wait(2000)
+  -- 第四步：发送执行命令并等待机械爪闭合稳定。
+  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  Wait(3000)
 end
 
 local function openGripper()
@@ -108,9 +113,12 @@ local function openGripper()
   SetHoldRegs(gripperId, 1001, 1, {0}, "U16")
   -- 第二步：设置动作允许力。
   SetHoldRegs(gripperId, 1002, 2, {65535}, "U32")
-  -- 第三步：发送执行命令并等待机械爪张开稳定。
-  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  -- 第三步：等待位置和力参数被控制器锁存。旧版程序在此等待 2 秒；
+  -- 若直接执行，夹爪带着设备时可能只松开一部分。
   Wait(2000)
+  -- 第四步：发送执行命令并等待机械爪完全张开稳定。
+  SetHoldRegs(gripperId, 1000, 1, {9}, "U16")
+  Wait(3000)
 end
 
 local function initializeGripperSafely()

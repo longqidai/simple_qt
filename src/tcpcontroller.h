@@ -10,6 +10,8 @@
 #include <QVariantList>
 #include <QVector>
 
+#include <functional>
+
 class QMqttClient;
 class QProcess;
 
@@ -216,6 +218,7 @@ private:
                                         const QString &reason);
     void continueGuaranteedMeasurementStop();
     void finishGuaranteedMeasurementStop();
+    void abortAfterGuaranteedStopTimeout(const QString &reason);
     void handleMqttMessage(const QByteArray &message, const QString &topic);
     void handleProjectResponse(const QByteArray &message);
     void handleTaskResponse(const QByteArray &message);
@@ -229,6 +232,8 @@ private:
     void finishFtpDownload();
 
     void stopStepTimer();
+    void scheduleWorkflowAction(int delayMs, const std::function<void()> &action);
+    void completeAbortedWorkflow(const QString &progress, bool notifyArm = true);
     void cleanupDeviceConnections();
     void updateStatistics();
 
@@ -266,6 +271,7 @@ private:
     bool m_guaranteedStopNeedsPutBack;
     int m_guaranteedStopAttempts;
     QString m_guaranteedStopReason;
+    quint64 m_workflowGeneration;
 
     QString m_statusText;
     QString m_currentProgress;
