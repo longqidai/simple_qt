@@ -9,7 +9,7 @@ ApplicationWindow {
     height: 780
     minimumWidth: 780
     minimumHeight: 620
-    title: qsTr("SLAM 标定工具")
+    title: calibrationMode === "laser" ? qsTr("激光标定工具") : qsTr("SLAM 标定工具")
     color: "#f3f6fb"
 
     readonly property color primaryColor: "#2563eb"
@@ -19,6 +19,7 @@ ApplicationWindow {
     property bool logExpanded: false
     property int selectionRevision: 0
     property bool closeAfterSafeStop: false
+    property string calibrationMode: "slam"
 
     onClosing: {
         if (!closeAfterSafeStop && tcpController.armRunning) {
@@ -129,6 +130,7 @@ ApplicationWindow {
 
     ScrollView {
         id: page
+        visible: window.calibrationMode === "slam"
         anchors.fill: parent
         clip: true
         contentWidth: availableWidth
@@ -143,12 +145,51 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.topMargin: 16
                 implicitHeight: 54
-                Column {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 2
-                    Label { text: qsTr("SLAM 标定工具"); color: window.textColor; font.pixelSize: 25; font.bold: true }
-                    Label { text: qsTr("机械臂与设备自动标定"); color: window.secondaryTextColor; font.pixelSize: 13 }
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 16
+
+                    Column {
+                        Layout.alignment: Qt.AlignVCenter
+                        spacing: 2
+                        Label { text: qsTr("SLAM 标定工具"); color: window.textColor; font.pixelSize: 25; font.bold: true }
+                        Label { text: qsTr("机械臂与设备自动标定"); color: window.secondaryTextColor; font.pixelSize: 13 }
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    Rectangle {
+                        Layout.preferredWidth: 264
+                        Layout.preferredHeight: 40
+                        radius: 10
+                        color: "#e9eef6"
+                        border.color: window.borderColor
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            spacing: 3
+
+                            Button {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                text: qsTr("SLAM 标定")
+                                background: Rectangle { radius: 7; color: "white"; border.color: window.primaryColor }
+                                contentItem: Label { text: parent.text; color: window.primaryColor; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            }
+                            Button {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                text: qsTr("激光标定")
+                                enabled: !tcpController.armRunning
+                                onClicked: window.calibrationMode = "laser"
+                                background: Rectangle { radius: 7; color: parent.hovered ? "#f8fafc" : "transparent" }
+                                contentItem: Label { text: parent.text; color: parent.enabled ? window.textColor : "#98a2b3"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                                ToolTip.visible: hovered && !enabled
+                                ToolTip.text: qsTr("请先结束当前 SLAM 标定任务")
+                            }
+                        }
+                    }
                 }
             }
 
@@ -517,5 +558,15 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    LaserCalibrationPage {
+        anchors.fill: parent
+        visible: window.calibrationMode === "laser"
+        primaryColor: window.primaryColor
+        textColor: window.textColor
+        secondaryTextColor: window.secondaryTextColor
+        borderColor: window.borderColor
+        onSwitchToSlamRequested: window.calibrationMode = "slam"
     }
 }
