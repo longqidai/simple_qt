@@ -5,6 +5,7 @@
 #include <QUrl>
 
 #include "tcpcontroller.h"
+#include "lasercalibrationcontroller.h"
 
 int main(int argc, char *argv[])
 {
@@ -16,9 +17,11 @@ int main(int argc, char *argv[])
     QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::NoProxy));
 
     TcpController controller;
+    LaserCalibrationController laserController;
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("tcpController", &controller);
+    engine.rootContext()->setContextProperty("laserController", &laserController);
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
 
     if (engine.rootObjects().isEmpty())

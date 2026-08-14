@@ -520,6 +520,13 @@ bool TcpController::armRunning() const { return m_taskActive; }
 QString TcpController::statusText() const { return m_statusText; }
 QString TcpController::currentProgress() const { return m_currentProgress; }
 QStringList TcpController::debugLog() const { return m_debugLog; }
+void TcpController::clearDebugLog()
+{
+    if (m_debugLog.isEmpty())
+        return;
+    m_debugLog.clear();
+    emit debugLogChanged();
+}
 QString TcpController::host() const { return m_host; }
 int TcpController::port() const { return m_port; }
 QString TcpController::wifiNamePart() const { return m_wifiNamePart; }
@@ -1451,15 +1458,13 @@ void TcpController::handleScannedSn(const QString &sn)
     emit currentDeviceChanged();
     emit wifiNamePartChanged();
     appendLog(QStringLiteral("扫描到设备 SN: %1").arg(cleanSn));
-    if (!sendArmCommand(QStringLiteral("$$MT,START"))) {
-        failCurrentSlot(QStringLiteral("扫码完成后无法立即启动机械臂"));
-        return;
-    }
-    m_armMotionStarted = true;
-    m_armMotionFinished = false;
-    appendLog(QStringLiteral("扫码完成：机械臂安全抬升并夹取设备返回 Home；上位机并行连接设备"));
+    // Do not let the arm pick up the device yet.  Wi-Fi, device TCP, MQTT,
+    // project/task setup, preinitialization and the raw collection directory
+    // are all validated while the device remains in its tray slot.  Only a
+    // confirmed "collecting" response is allowed to release $$MT,START.
+    appendLog(QStringLiteral("扫码完成：设备暂留托盘，先检查 Wi-Fi、MQTT 和采集目录"));
     setFlowState(FlowState::ConnectingWifi,
-                 QStringLiteral("机械臂正在夹取并返回 Home，同时连接设备 Wi-Fi：%1").arg(cleanSn),
+                 QStringLiteral("正在连接设备 Wi-Fi；检查通过前机械臂不会抓取：%1").arg(cleanSn),
                  kWifiTimeoutMs);
     connectWifiByNamePart(cleanSn);
 }
@@ -2497,25 +2502,16 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
                                          && description.contains(QStringLiteral("collect dir"),
                                                                  Qt::CaseInsensitive);
     if (m_flowState == FlowState::StartingCollection && collectDirectoryFailure) {
-        if (m_collectStartRecoveryAttempts < kCollectRecoveryMaxAttempts) {
-            stopStepTimer();
-            ++m_collectStartRecoveryAttempts;
-            m_retryCollectAfterStop = true;
-            m_collectStatus = QStringLiteral("正在释放设备采集目录和文件句柄");
-            emit collectStatusChanged();
-            appendLog(QStringLiteral("设备创建采集目录失败（恢复 %1/%2）；先发送 AC_STOP，等待停止确认和存储静置后再重试")
-                          .arg(m_collectStartRecoveryAttempts)
-                          .arg(kCollectRecoveryMaxAttempts));
-            if (!publishCollectAction(QStringLiteral("AC_STOP"))) {
-                m_retryCollectAfterStop = false;
-                failCurrentSlot(QStringLiteral("设备采集目录创建失败，且无法发送残留会话清理指令"));
-            }
-        } else {
-            m_collectStatus = QStringLiteral("设备存储目录创建失败");
-            emit collectStatusChanged();
-            failCurrentSlot(QStringLiteral("设备连续 %1 次无法创建采集目录；请检查设备存储是否已挂载、空间是否充足或文件系统是否只读")
-                                .arg(kCollectRecoveryMaxAttempts + 1));
-        }
+        // error=3 with an empty path means AC_START never created a session.
+        // The robot is deliberately still waiting at the scan position, so
+        // mark this slot failed and scan the next one without pick/put-back.
+        m_collectActive = false;
+        m_retryCollectAfterStop = false;
+        m_collectStatus = QStringLiteral("设备存储目录创建失败");
+        emit collectStatusChanged();
+        appendLog(QStringLiteral("采集目录创建失败，设备尚未被抓取；跳过当前槽位并直接扫描下一设备"));
+        failCurrentSlot(QStringLiteral("设备采集失败，错误码 %1：%2")
+                            .arg(errorCode).arg(description));
         return;
     }
 
@@ -2529,6 +2525,8 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
 
     if (errorCode != 0 && !alreadyCollecting) {
         m_collectStatus = QStringLiteral("采集异常");
+        if (m_flowState == FlowState::StartingCollection)
+            m_collectActive = false;
         emit collectStatusChanged();
         if (m_flowState == FlowState::StartingCollection
             || m_flowState == FlowState::StoppingCollection) {
@@ -2549,6 +2547,19 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
             m_collectReadyForModeling = true;
             if (alreadyCollecting)
                 appendLog(QStringLiteral("设备已处于采集状态，按幂等成功继续流程"));
+
+            // This is the first point at which the device is allowed to leave
+            // its tray slot: networking, MQTT setup and raw collection have
+            // all succeeded and the collection directory now exists.
+            if (!m_armMotionStarted) {
+                if (!sendArmCommand(QStringLiteral("$$MT,START"))) {
+                    failCurrentSlot(QStringLiteral("设备检查通过，但无法通知机械臂抓取设备"));
+                    return;
+                }
+                m_armMotionStarted = true;
+                m_armMotionFinished = false;
+                appendLog(QStringLiteral("设备 Wi-Fi、MQTT 与采集目录检查通过，允许机械臂抓取并返回 Home"));
+            }
             if (!m_armAtHomeReady) {
                 setFlowState(FlowState::WaitingArmHome,
                              QStringLiteral("原始采集已就绪，等待机械臂夹取设备并回到 Home 静置"),

@@ -89,6 +89,7 @@ public slots:
     void disconnectFromServer();
     void toggleArmTask(const QVariantList &leftSlots, const QVariantList &rightSlots);
     void clearTaskResults();
+    void clearDebugLog();
 
 signals:
     void connectedChanged();

@@ -13,6 +13,11 @@ compile_commands.json
 *.dll
 *.exe
 
+# The laser-calibration camera backend is intentionally self-contained.
+# Keep the MinGW import libraries and runtime DLLs shipped under third_party.
+!third_party/opencv-3.4.5/x64/mingw/lib/*.a
+!third_party/opencv-3.4.5/x64/mingw/bin/*.dll
+
 # qmake / Qt Creator user state
 *.pro.user
 *.pro.user.*

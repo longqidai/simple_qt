@@ -6,11 +6,11 @@
 
 1. 连接 GRR20 机械臂并完成 `$$MT,CONNECT` 握手。
 2. 选择左右 2×3 托盘槽位。
-3. 机械臂扫码并上报设备 SN；上位机收到 SN 后立即发送 `$$MT,START`。
-4. 机械臂先从扫码点垂直抬高 150 mm，再移动到抓取点上方并垂直下探夹取，然后携带设备返回 `P41/Home` 静置 2 秒并上报 `$$MT,HOMEOK`；与此同时，上位机根据 SN 连接设备 Wi-Fi、读取设备信息并准备采集任务。
-5. 原始采集准备完成并且已经收到机械臂 `HOMEOK` 后，上位机才发送真实扫描 `AC_START`，确保设备扫描预初始化期间保持静止。
-6. 订阅 `slam_app/report/device_status` 并等待设备上报 `init_ready=1`，然后创建扫描工程和任务。
-7. 创建扫描任务后先发送带任务 ID、母工程 ID 的 `ModelingRequest(AC_PREINIT)` 完成设备扫描模块预初始化；成功后发送 `data_collect AC_START` 建立原始数据记录，再发送 `ModelingRequest(AC_START)`。只有设备进入 `EC_ScanScanning` 才表示传感器真正打开并开始扫描。如果设备仍返回 `preinit required`，程序会再次执行 `AC_PREINIT` 后有限次重试 `AC_START`。
+3. 机械臂扫码并上报设备 SN；设备暂留托盘，上位机不立即发送 `$$MT,START`。
+4. 上位机根据 SN 连接设备 Wi-Fi、读取设备信息、连接 MQTT，等待 `init_ready=1`，并创建扫描工程和任务。任一步失败都会把当前槽位标红并直接扫描下一设备，不抓取也不放回。
+5. 创建扫描任务后先发送带任务 ID、母工程 ID 的 `ModelingRequest(AC_PREINIT)`，再发送 `data_collect AC_START`。只有收到 `collecting`、确认采集目录创建成功后，上位机才发送 `$$MT,START` 允许机械臂抓取。
+6. 机械臂从扫码点安全抬高，移动到抓取点夹取设备，携带设备返回 `P41/Home` 静置并上报 `$$MT,HOMEOK`。
+7. 原始采集和 `HOMEOK` 都已就绪后，上位机发送 `ModelingRequest(AC_START)`。只有设备进入 `EC_ScanScanning` 才表示传感器真正打开并开始扫描；如果设备返回 `preinit required`，程序会再次执行 `AC_PREINIT` 后有限次重试。
 8. 设备进入 `EC_ScanScanning` 后，上位机发送 `$$MT,SCANREADY`；机械臂回复 `$$MT,SCANREADYOK` 后才离开 Home 执行 SLAM 轨迹，完成后上报 `$$MT,RUNFINISH`。
 9. 机械臂上报运动完成且设备已进入真实扫描后，发送 `ModelingRequest(AC_STOP)` 并等待设备保存扫描工程，再停止标定原始数据记录。
 10. 保存该设备的 SN、Wi-Fi 和采集目录，立即通知机械臂放回设备并处理下一槽位。
@@ -19,7 +19,7 @@
 
 `data_collect` 只负责标定原始数据记录，单独调用不会进入设备完整扫描流程。程序还必须启动 `modeling`。设备联网和任务准备可以与机械臂夹取并行，但真实扫描初始化必须等机械臂携带设备回到 Home 静置；真实扫描就绪后才释放机械臂标定轨迹。
 
-若设备返回 `error=3 / failed to create collect dir`，表示设备端文件或目录操作失败。程序会先发送 `AC_STOP` 并等待设备明确确认停止，再静置 5 秒释放文件句柄，最多进行 3 次恢复重试；只有收到 `collecting` 才会继续真实扫描。连续失败通常表示设备存储未挂载、剩余空间不足或文件系统只读，需要在设备端处理，程序不会在未采集时误放行机械臂标定轨迹。
+若设备返回 `error=3 / failed to create collect dir`，表示设备端文件或目录操作失败。由于此时机械臂尚未抓取，上位机会直接将当前槽位标记失败并扫描下一设备，不执行无意义的抓取和放回。该错误通常表示设备存储未挂载、剩余空间不足或文件系统只读，需要在设备端处理。
 
 设备 Wi-Fi 状态采用连续检测去抖，短暂一次扫描不到热点不会立即判定断线；MQTT 发生瞬时中断时会重新连接、重新订阅，并恢复可安全重发的采集控制指令。
 
