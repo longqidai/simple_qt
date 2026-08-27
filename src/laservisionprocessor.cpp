@@ -3,6 +3,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QBuffer>
 #include <QImage>
+#include <QMap>
 #include <QThread>
 
 #include <opencv2/core.hpp>
@@ -26,6 +27,7 @@ struct FrameResult {
     bool success = false;
     double height = 0.0;
     QString error;
+    QStringList diagnostics;
     cv::Mat annotated;
 };
 
@@ -155,7 +157,7 @@ bool findLaserSpot(const cv::Mat &image, bool shortFocus,
             continue;
         const double aspect = static_cast<double>(std::max(width, height))
             / std::min(width, height);
-        if (aspect > 30.0)
+        if (aspect > 2.5)
             continue;
 
         int validColors = 0;
@@ -301,23 +303,41 @@ FrameResult processFrame(const cv::Mat &frame, bool shortFocus)
         result.error = QStringLiteral("摄像头返回空图像");
         return result;
     }
+    result.diagnostics.append(QStringLiteral("图像读取成功：%1×%2")
+                                  .arg(frame.cols).arg(frame.rows));
     cv::Point2f referenceA, referenceB;
     if (!findRedReference(frame, shortFocus, &referenceA, &referenceB,
                           &result.error)) {
         return result;
     }
     const double referencePixels = cv::norm(referenceB - referenceA);
+    result.diagnostics.append(QStringLiteral(
+        "红色参考圆识别成功：A=(%1,%2)，B=(%3,%4)，间距=%5 px")
+                                  .arg(referenceA.x, 0, 'f', 1)
+                                  .arg(referenceA.y, 0, 'f', 1)
+                                  .arg(referenceB.x, 0, 'f', 1)
+                                  .arg(referenceB.y, 0, 'f', 1)
+                                  .arg(referencePixels, 0, 'f', 2));
     const double pixelPerMm = referencePixels
         / (shortFocus ? kShortReferenceLengthMm : kLongReferenceLengthMm);
     if (!std::isfinite(pixelPerMm) || pixelPerMm <= 0.0) {
         result.error = QStringLiteral("红色参考物比例无效");
         return result;
     }
+    result.diagnostics.append(QStringLiteral(
+        "像素比例计算成功：参考长度=%1 mm，比例=%2 px/mm")
+                                  .arg(shortFocus ? kShortReferenceLengthMm
+                                                  : kLongReferenceLengthMm,
+                                       0, 'f', 1)
+                                  .arg(pixelPerMm, 0, 'f', 6));
 
     cv::Point2f spot;
     cv::Mat spotMask;
     if (!findLaserSpot(frame, shortFocus, &spot, &spotMask, &result.error))
         return result;
+    result.diagnostics.append(QStringLiteral("绿色激光点识别成功：中心=(%1,%2)")
+                                  .arg(spot.x, 0, 'f', 1)
+                                  .arg(spot.y, 0, 'f', 1));
     double lineDistance = 0.0;
     cv::Vec4f laserLine;
     cv::Point2f foot;
@@ -326,6 +346,11 @@ FrameResult processFrame(const cv::Mat &frame, bool shortFocus)
                                &result.error)) {
         return result;
     }
+    result.diagnostics.append(QStringLiteral(
+        "激光线拟合成功：垂足=(%1,%2)，点线距离=%3 px")
+                                  .arg(foot.x, 0, 'f', 1)
+                                  .arg(foot.y, 0, 'f', 1)
+                                  .arg(lineDistance, 0, 'f', 2));
     result.height = lineDistance / pixelPerMm;
     if (!std::isfinite(result.height) || result.height <= 0.0
         || result.height > 5000.0) {
@@ -333,6 +358,11 @@ FrameResult processFrame(const cv::Mat &frame, bool shortFocus)
                            .arg(result.height, 0, 'f', 3);
         return result;
     }
+    result.diagnostics.append(QStringLiteral(
+        "视觉高度计算成功：%1 px ÷ %2 px/mm = %3 mm")
+                                  .arg(lineDistance, 0, 'f', 2)
+                                  .arg(pixelPerMm, 0, 'f', 6)
+                                  .arg(result.height, 0, 'f', 3));
 
     result.annotated = frame.clone();
     cv::circle(result.annotated, referenceA, 6, cv::Scalar(255, 0, 0), -1);
@@ -377,11 +407,12 @@ std::vector<int> availableCameraIndexes()
 
 } // namespace
 
+//构造函数
 LaserVisionProcessor::LaserVisionProcessor(QObject *parent)
     : QObject(parent)
 {
     connect(&m_watcher, &QFutureWatcher<Result>::finished, this, [this] {
-        const Result result = m_watcher.result();
+        const Result result = m_watcher.result();//得到result
         m_shortCameraIndex = result.shortCameraIndex;
         m_longCameraIndex = result.longCameraIndex;
         emit cameraMappingChanged(
@@ -395,6 +426,8 @@ LaserVisionProcessor::LaserVisionProcessor(QObject *parent)
                 : QStringLiteral("未找到两只可用 USB 摄像头"));
         if (m_runningGeneration != m_generation)
             return;
+        for (const QString &message : result.diagnostics)
+            emit diagnosticMessage(message);//发出finished函数,发给LaserCalibrationController
         emit measurementFinished(result.success, result.height, result.error,
                                  result.imageDataUrl, result.cameraIndex);
     });
@@ -431,9 +464,10 @@ bool LaserVisionProcessor::requestMeasurement(bool shortFocus)
     if (busy())
         return false;
     m_runningGeneration = ++m_generation;
-    m_watcher.setFuture(QtConcurrent::run(
+    m_watcher.setFuture(QtConcurrent::run(//启动visionprocesso中的runMeasurement
         &LaserVisionProcessor::runMeasurement, shortFocus,
-        m_shortCameraIndex, m_longCameraIndex, m_singleCameraDebug));
+        m_shortCameraIndex, m_longCameraIndex, m_singleCameraDebug));//从QFuture<LaserVisionProcessor::Result>得到返回值result
+        //自动返回finished
     return true;
 }
 
@@ -447,8 +481,23 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
     bool singleCameraDebug)
 {
     Result result;
+    const QString focusName = shortFocus ? QStringLiteral("近焦")
+                                         : QStringLiteral("远焦");
+    result.diagnostics.append(QStringLiteral(
+        "%1视觉任务开始：模式=%2，目标采样=%3 帧，最多检查=%4 帧")
+                                  .arg(focusName,
+                                       singleCameraDebug
+                                           ? QStringLiteral("模拟单摄像头")
+                                           : QStringLiteral("正式双摄像头"))
+                                  .arg(kRequiredSamples)
+                                  .arg(kMaximumFrames));
     if (shortCameraIndex < 0 || longCameraIndex < 0) {
         const std::vector<int> cameras = availableCameraIndexes();
+        QStringList cameraTexts;
+        for (int camera : cameras)
+            cameraTexts.append(QString::number(camera));
+        result.diagnostics.append(QStringLiteral("摄像头扫描完成：可用索引=[%1]")
+                                      .arg(cameraTexts.join(',')));
         const std::size_t requiredCount = singleCameraDebug ? 1u : 2u;
         if (cameras.size() < requiredCount) {
             result.error = QStringLiteral(
@@ -473,6 +522,11 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
     result.shortCameraIndex = shortCameraIndex;
     result.longCameraIndex = longCameraIndex;
     result.cameraIndex = shortFocus ? shortCameraIndex : longCameraIndex;
+    result.diagnostics.append(QStringLiteral(
+        "摄像头选择完成：近焦=%1，远焦=%2，本次使用=%3")
+                                  .arg(shortCameraIndex)
+                                  .arg(longCameraIndex)
+                                  .arg(result.cameraIndex));
 
     cv::VideoCapture camera(result.cameraIndex, cv::CAP_DSHOW);
     if (!camera.isOpened()) {
@@ -485,6 +539,10 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
     camera.set(cv::CAP_PROP_FRAME_WIDTH, kFrameWidth);
     camera.set(cv::CAP_PROP_FRAME_HEIGHT, kFrameHeight);
     camera.set(cv::CAP_PROP_FPS, 30);
+    result.diagnostics.append(QStringLiteral(
+        "摄像头 %1 打开成功，请求参数=%2×%3@30fps")
+                                  .arg(result.cameraIndex)
+                                  .arg(kFrameWidth).arg(kFrameHeight));
     for (int i = 0; i < 8; ++i) {
         cv::Mat warmup;
         camera.read(warmup);
@@ -514,13 +572,25 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
                     cv::Scalar(0, 215, 255), 2, cv::LINE_AA);
         result.height = shortFocus ? 615.0 : 625.0;
         result.imageDataUrl = imageDataUrl(annotated);
+        result.diagnostics.append(QStringLiteral(
+            "模拟测量成功：读取真实摄像头画面，使用默认高度=%1 mm（不执行参考圆/激光点算法）")
+                                      .arg(result.height, 0, 'f', 3));
         result.success = true;
         return result;
     }
-
+    //检测参考圆或标定目标；
+    //检测激光点；
+    //计算图像中的激光高度；
+    ////生成处理图像；
     std::vector<double> heights;
     cv::Mat latestAnnotated;
     QString latestError = QStringLiteral("尚未获得有效图像");
+    QStringList latestSuccessDiagnostics;
+    QStringList latestAttemptDiagnostics;
+    QMap<QString, int> failureCounts;
+    int framesRead = 0;
+    int rejectedByStability = 0;
+    int resetByJump = 0;
     for (int frameIndex = 0;
          frameIndex < kMaximumFrames
          && static_cast<int>(heights.size()) < kRequiredSamples;
@@ -528,15 +598,20 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
         cv::Mat frame;
         if (!camera.read(frame) || frame.empty()) {
             latestError = QStringLiteral("摄像头读帧失败");
+            ++failureCounts[latestError];
             QThread::msleep(30);
             continue;
         }
+        ++framesRead;
         const FrameResult measurement = processFrame(frame, shortFocus);
+        latestAttemptDiagnostics = measurement.diagnostics;
         if (!measurement.success) {
             latestError = measurement.error;
+            ++failureCounts[latestError];
             continue;
         }
         latestAnnotated = measurement.annotated;
+        latestSuccessDiagnostics = measurement.diagnostics;
         if (!heights.empty()) {
             std::vector<double> sorted = heights;
             std::sort(sorted.begin(), sorted.end());
@@ -544,14 +619,31 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
             const double difference = std::abs(measurement.height - median);
             if (difference > 18.0) {
                 heights.clear();
+                ++resetByJump;
             } else if (difference > 5.0) {
+                ++rejectedByStability;
                 continue;
             }
         }
         heights.push_back(measurement.height);
     }
     camera.release();
+    QStringList failureSummary;
+    for (auto it = failureCounts.cbegin(); it != failureCounts.cend(); ++it)
+        failureSummary.append(QStringLiteral("%1=%2").arg(it.key()).arg(it.value()));
+    result.diagnostics.append(QStringLiteral(
+        "图像采样结束：成功读取=%1，有效样本=%2/%3，稳定性拒绝=%4，突跳重置=%5")
+                                  .arg(framesRead).arg(heights.size())
+                                  .arg(kRequiredSamples)
+                                  .arg(rejectedByStability).arg(resetByJump));
+    if (!failureSummary.isEmpty())
+        result.diagnostics.append(QStringLiteral("无效帧统计：%1")
+                                      .arg(failureSummary.join(QStringLiteral("；"))));
     if (heights.size() < kRequiredSamples) {
+        if (!latestAttemptDiagnostics.isEmpty()) {
+            result.diagnostics.append(QStringLiteral("最后一次算法尝试已完成的步骤："));
+            result.diagnostics.append(latestAttemptDiagnostics);
+        }
         result.error = QStringLiteral("视觉测量失败：%1（有效帧 %2/%3）")
                            .arg(latestError)
                            .arg(heights.size()).arg(kRequiredSamples);
@@ -564,6 +656,14 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
         ? heights[heights.size() / 2]
         : (heights[heights.size() / 2 - 1] + heights[heights.size() / 2]) / 2.0;
     result.imageDataUrl = imageDataUrl(latestAnnotated);
+    result.diagnostics.append(latestSuccessDiagnostics);
+    QStringList sampleTexts;
+    for (double sample : heights)
+        sampleTexts.append(QString::number(sample, 'f', 3));
+    result.diagnostics.append(QStringLiteral(
+        "多帧融合成功：排序样本=[%1] mm，中位数=%2 mm")
+                                  .arg(sampleTexts.join(QStringLiteral(", ")))
+                                  .arg(result.height, 0, 'f', 3));
     result.success = true;
     return result;
 }

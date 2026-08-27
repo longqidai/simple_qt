@@ -108,6 +108,8 @@ signals:
     void progressChanged();
     void errorChanged();
     void logChanged();
+    void logEntryAdded(const QString &entry);
+    void logCleared();
     void measurementChanged();
     void cameraChanged();
     void faceChanged();

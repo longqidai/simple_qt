@@ -7,10 +7,34 @@
             "cStandard": "c11",
             "cppStandard": "c++17",
             "includePath": [
+                "${workspaceFolder}",
                 "${workspaceFolder}/src",
+                "${workspaceFolder}/third_party/opencv-3.4.5/include",
+                "${workspaceFolder}/build-qmake-debug",
+                "${workspaceFolder}/build-qmake-debug/debug",
                 "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtCore",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtGui",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtANGLE",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtQml",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtQmlModels",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtQuick",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtNetwork",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtMqtt",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtSql",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtConcurrent",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/QtWidgets",
+                "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/mkspecs/win32-g++",
                 "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include/**"
             ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/src",
+                    "${workspaceFolder}/third_party/opencv-3.4.5/include",
+                    "D:/Qt/Qt5.14.2/5.14.2/mingw73_64/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            },
             "defines": [
                 "UNICODE",
                 "_UNICODE",

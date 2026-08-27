@@ -15,8 +15,10 @@
 local TCP_BIND_IP = "192.168.5.1"
 local TCP_PORT = 6601
 local TRAY_ROWS = 2
-local TRAY_COLUMNS = 3
+local TRAY_COLUMNS = 4
 local SLOT_COUNT = TRAY_ROWS * TRAY_COLUMNS
+-- 临时兼容损坏的 SLAM 二维码：仍执行一次拍码，但统一上报此 SN。
+-- 二维码恢复后将此值改为空字符串即可恢复真实扫码结果。
 local SCAN_RETRY_COUNT = 5
 local APPROACH_HEIGHT = 150
 local SCAN_CLEARANCE_HEIGHT = 150
@@ -169,16 +171,16 @@ local function moveHome()
 end
 
 local function createSlamTrays()
-  -- 第一步：用 P27～P30 四个角点建立左托盘 2×3 扫码网格。
+  -- 第一步：用 P27～P30 四个角点建立左托盘 2×4 扫码网格。
   CreateTray("slam_left_scan", {TRAY_ROWS, TRAY_COLUMNS}, {P27, P28, P29, P30})
-  -- 第二步：用 P21～P24 四个角点建立左托盘 2×3 夹取网格。
+  -- 第二步：用 P21～P24 四个角点建立左托盘 2×4 夹取网格。
   CreateTray("slam_left_pick", {TRAY_ROWS, TRAY_COLUMNS}, {P21, P22, P23, P24})
-  -- 第三步：用 P31～P34 四个角点建立右托盘 2×3 扫码网格。
+  -- 第三步：用 P31～P34 四个角点建立右托盘 2×4 扫码网格。
   CreateTray("slam_right_scan", {TRAY_ROWS, TRAY_COLUMNS}, {P31, P32, P33, P34})
-  -- 第四步：用 P35～P38 四个角点建立右托盘 2×3 夹取网格。
+  -- 第四步：用 P35～P38 四个角点建立右托盘 2×4 夹取网格。
   CreateTray("slam_right_pick", {TRAY_ROWS, TRAY_COLUMNS}, {P35, P36, P37, P38})
-  -- 四个网格创建完成后，槽位 1～6 可通过 GetTrayPoint 自动插值得到实际点位。
-  trace("SLAM trays created: left/right 2x3")
+  -- 四个网格创建完成后，槽位 1～8 可通过 GetTrayPoint 自动插值得到实际点位。
+  trace("SLAM trays created: left/right 2x4")
 end
 
 local function scanTrayName(side)
@@ -347,7 +349,7 @@ local function putBackCurrentDevice()
 end
 
 local function handleSlotCommand(side, slotText)
-  -- 第一步：把协议中的槽位文本转换为数字，并限制在 1～6。
+  -- 第一步：把协议中的槽位文本转换为数字，并限制在 1～8。
   local slot = tonumber(slotText)
   if slot == nil or slot < 1 or slot > SLOT_COUNT then
     sendFrame("$$MT,FAILED,SLOT," .. tostring(slotText))

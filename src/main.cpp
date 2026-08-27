@@ -15,6 +15,7 @@ int main(int argc, char *argv[])
     // network. Bypass any proxy configuration inherited by Qt, because HTTP
     // and caching proxies cannot carry these raw device protocols.
     QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::NoProxy));
+    //不使用网络代理，因为连接的都是本地设备地址 局域网
 
     TcpController controller;
     LaserCalibrationController laserController;

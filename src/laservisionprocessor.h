@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QFutureWatcher>
 #include <QString>
+#include <QStringList>
 
 // Runs the legacy two-camera OpenCV measurement outside the QML thread.
 // The USB cameras are intentionally mapped exactly like the previous host:
@@ -30,6 +31,9 @@ signals:
                              int cameraIndex);
     void cameraMappingChanged(int shortCameraIndex, int longCameraIndex,
                               const QString &description);
+    // 一次视觉测量结束后，把算法关键步骤的摘要送回主线程写入运行日志。
+    // 只输出阶段性结果，不逐帧刷屏。
+    void diagnosticMessage(const QString &message);
 
 private:
     struct Result {
@@ -40,6 +44,7 @@ private:
         int cameraIndex = -1;
         int shortCameraIndex = -1;
         int longCameraIndex = -1;
+        QStringList diagnostics;
     };
 
     static Result runMeasurement(bool shortFocus,

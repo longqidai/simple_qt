@@ -26,6 +26,58 @@ ApplicationWindow {
 
     // 根据窗口宽度动态调整字体和间距
     property real scaleFactor: Math.max(0.75, Math.min(1.5, width / 1400))
+
+    // 日志只增量追加一行；浏览历史时保持当前位置，位于底部时跟随新日志。
+    function fillLogModel(model, lines) {
+        model.clear()
+        if (!lines)
+            return
+        for (var i = 0; i < lines.length; ++i) {
+            if (lines[i] !== "")
+                model.append({"message": lines[i]})
+        }
+    }
+
+    function syncLogModel(view, model, lines) {
+        var followEnd = view.count === 0 || view.atYEnd
+        var oldPosition = view.contentY
+
+        // 正常新增一条时只追加最后一行，不重建整个列表。
+        if (lines && model.count + 1 === lines.length) {
+            model.append({"message": lines[lines.length - 1]})
+        // C++ 日志达到 500 条后会移除最旧项，再追加最新项。
+        } else if (lines && model.count === lines.length && model.count > 1
+                   && model.get(1).message === lines[0]
+                   && model.get(model.count - 1).message !== lines[lines.length - 1]) {
+            model.remove(0)
+            model.append({"message": lines[lines.length - 1]})
+        } else {
+            fillLogModel(model, lines)
+        }
+
+        Qt.callLater(function() {
+            if (followEnd)
+                view.positionViewAtEnd()
+            else
+                view.contentY = oldPosition
+        })
+    }
+
+    function loadDebugLogHistory() {
+        var lines = calibrationMode === "laser"
+                ? (laserController.logText.length > 0
+                   ? laserController.logText.split("\n") : [])
+                : tcpController.debugLog
+        syncLogModel(debugLogView, debugLogModel, lines)
+    }
+
+    ListModel { id: debugLogModel }
+
+    Component.onCompleted: {
+        Qt.callLater(window.loadDebugLogHistory)
+    }
+
+    onCalibrationModeChanged: Qt.callLater(window.loadDebugLogHistory)
     
     onClosing: {
         if (laserController.running) {
@@ -43,6 +95,17 @@ ApplicationWindow {
 
     Connections {
         target: tcpController
+        function onDebugLogChanged() {
+            if (window.calibrationMode === "slam")
+                window.syncLogModel(debugLogView, debugLogModel, tcpController.debugLog)
+        }
+        function onDebugLogEntryAdded(entry) {
+            if (slamLogView.followTail)
+                Qt.callLater(slamLogView.positionViewAtEnd)
+        }
+        function onDebugLogCleared() {
+            slamLogView.followTail = true
+        }
         onArmRunningChanged: {
             if (window.closeAfterSafeStop && !tcpController.armRunning)
                 window.close()
@@ -51,6 +114,12 @@ ApplicationWindow {
 
     Connections {
         target: laserController
+        function onLogChanged() {
+            if (window.calibrationMode === "laser")
+                window.syncLogModel(debugLogView, debugLogModel,
+                                    laserController.logText.length > 0
+                                    ? laserController.logText.split("\n") : [])
+        }
         onRunningChanged: {
             if (window.closeAfterSafeStop && !laserController.running)
                 window.close()
@@ -65,10 +134,14 @@ ApplicationWindow {
         ListElement { selected: false }
         ListElement { selected: false }
         ListElement { selected: false }
+        ListElement { selected: false }
+        ListElement { selected: false }
     }
 
     ListModel {
         id: rightSelection
+        ListElement { selected: false }
+        ListElement { selected: false }
         ListElement { selected: false }
         ListElement { selected: false }
         ListElement { selected: false }
@@ -341,21 +414,21 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 color: "#111827"; radius: 6
-                ScrollView {
+                ListView {
+                    id: debugLogView
                     anchors.fill: parent; anchors.margins: 8
-                    TextArea {
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.Wrap
-                        text: window.calibrationMode === "laser"
-                              ? laserController.logText
-                              : tcpController.debugLog.join("\n")
+                    model: debugLogModel
+                    clip: true
+                    spacing: 2
+                    delegate: Label {
+                        width: debugLogView.width
+                        text: message
                         color: "#d1fae5"
-                        background: null
                         font.family: "Consolas"
                         font.pixelSize: 12
-                        onTextChanged: cursorPosition = length
+                        wrapMode: Text.WrapAnywhere
                     }
+                    ScrollBar.vertical: ScrollBar { }
                 }
             }
         }
@@ -472,7 +545,11 @@ ApplicationWindow {
                             enabled: !tcpController.armRunning
                             text: tcpController.connected ? qsTr("断开连接") : qsTr("连接机械臂")
                             font.pixelSize: 12 * scaleFactor
+
+
                             onClicked: tcpController.toggleConnection()
+
+
                         }
                     }
 
@@ -595,7 +672,7 @@ ApplicationWindow {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         anchors.top: parent.top
                                         anchors.topMargin: 12 * scaleFactor
-                                        text: trayDelegate.sideName === "left" ? qsTr("左托盘  2×3") : qsTr("右托盘  2×3")
+                                        text: trayDelegate.sideName === "left" ? qsTr("左托盘  2×4") : qsTr("右托盘  2×4")
                                         color: window.textColor
                                         font.bold: true
                                         font.pixelSize: 14 * scaleFactor
@@ -604,7 +681,7 @@ ApplicationWindow {
                                     Grid {
                                         anchors.centerIn: parent
                                         anchors.verticalCenterOffset: 12 * scaleFactor
-                                        columns: 3
+                                        columns: 4
                                         rows: 2
                                         spacing: 12 * scaleFactor
 
@@ -612,7 +689,7 @@ ApplicationWindow {
                                             model: trayDelegate.selectionModel
                                             Rectangle {
                                                 property string visualState: window.visualSlotState(trayDelegate.sideName, index, selected)
-                                                width: Math.max(54 * scaleFactor, Math.min(74 * scaleFactor, (trayDelegate.width - 64 * scaleFactor) / 3))
+                                                width: Math.max(48 * scaleFactor, Math.min(68 * scaleFactor, (trayDelegate.width - 88 * scaleFactor) / 4))
                                                 height: 62 * scaleFactor
                                                 radius: 9 * scaleFactor
                                                 color: window.slotFillColor(visualState)
@@ -732,6 +809,7 @@ ApplicationWindow {
                                 if (tcpController.armRunning) {
                                     stopDialog.open()
                                 } else {
+                                    
                                     tcpController.toggleArmTask(window.selectedSlots(leftSelection),
                                                                 window.selectedSlots(rightSelection))
                                 }
@@ -790,15 +868,30 @@ ApplicationWindow {
                     clip: true
 
                     ListView {
-                        id: logView
+                        id: slamLogView
+                        property bool followTail: true
                         anchors.fill: parent
                         anchors.margins: 10 * scaleFactor
-                        model: tcpController.debugLog
                         clip: true
-                        spacing: 3 * scaleFactor
-                        onCountChanged: positionViewAtEnd()
-                        delegate: Label { width: logView.width; text: modelData; color: "#465066"; font.family: "Consolas"; font.pixelSize: 12 * scaleFactor; wrapMode: Text.Wrap }
-                        Label { anchors.centerIn: parent; visible: logView.count === 0; text: qsTr("暂无运行日志"); color: "#98a2b3"; font.pixelSize: 12 * scaleFactor }
+                        model: tcpController.debugLogModel
+                        spacing: 2 * scaleFactor
+                        delegate: Label {
+                            width: slamLogView.width
+                            text: display
+                            color: "#465066"
+                            font.family: "Consolas"
+                            font.pixelSize: 12 * scaleFactor
+                            wrapMode: Text.WrapAnywhere
+                        }
+                        onMovementEnded: followTail = atYEnd
+                        Label {
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.margins: 10 * scaleFactor
+                            visible: slamLogView.count === 0
+                            text: qsTr("暂无运行日志")
+                            color: "#a3adbd"
+                        }
                         ScrollBar.vertical: ScrollBar { }
                     }
                 }

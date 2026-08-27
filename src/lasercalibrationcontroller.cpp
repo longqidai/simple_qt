@@ -72,11 +72,16 @@ LaserCalibrationController::LaserCalibrationController(QObject *parent)
 {
     configureSockets();
     configureTimers();
+    //视觉信号槽
     connect(&m_vision, &LaserVisionProcessor::cameraMappingChanged,
             this, [this](int, int, const QString &description) {
         m_cameraStatus = description;
         emit cameraChanged();
         appendLog(QStringLiteral("摄像头映射: %1").arg(description));
+    });
+    connect(&m_vision, &LaserVisionProcessor::diagnosticMessage,
+            this, [this](const QString &message) {
+        appendLog(QStringLiteral("[视觉算法] %1").arg(message));
     });
     connect(&m_vision, &LaserVisionProcessor::measurementFinished,
             this, &LaserCalibrationController::handleVisionMeasurement);
@@ -256,6 +261,7 @@ void LaserCalibrationController::configureSockets()
 
 void LaserCalibrationController::configureTimers()
 {
+    //设置定时器
     m_handshakeTimer.setInterval(kArmHandshakeIntervalMs);
     connect(&m_handshakeTimer, &QTimer::timeout, this, [this] {
         if (m_armSocket.state() == QAbstractSocket::ConnectedState && !m_armReady)
@@ -374,7 +380,7 @@ bool LaserCalibrationController::startCalibration(const QVariantList &leftSlots,
         return false;
     }
     QString reason;
-    if (!validateMeasurements(measurements, &reason)) {
+    if (!validateMeasurements(measurements, &reason)) {//检查水平线高
         setError(reason);
         return false;
     }
@@ -501,8 +507,11 @@ void LaserCalibrationController::shutdown()
 
 void LaserCalibrationController::clearLog()
 {
+    if (m_logLines.isEmpty())
+        return;
     m_logLines.clear();
     emit logChanged();
+    emit logCleared();
 }
 
 void LaserCalibrationController::setState(State state, const QString &progress, int timeoutMs)
@@ -534,12 +543,14 @@ void LaserCalibrationController::appendLog(const QString &text)
 {
     if (text.isEmpty())
         return;
-    m_logLines.append(QStringLiteral("[%1] %2")
-                          .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")),
-                               text));
+    const QString entry = QStringLiteral("[%1] %2")
+                              .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss")),
+                                   text);
+    m_logLines.append(entry);
     while (m_logLines.size() > 500)
         m_logLines.removeFirst();
     emit logChanged();
+    emit logEntryAdded(entry);
 }
 
 void LaserCalibrationController::sendArm(const QByteArray &command)
@@ -717,6 +728,7 @@ void LaserCalibrationController::handleScannedSn(const QString &sn)
 
 void LaserCalibrationController::processReceiverBuffer()
 {
+    //二进制报文处理
     const QByteArray snHeader("\xaa\x44\x12\x1c\x25", 5);
     const QByteArray rangeHeader("\xaa\x44\x12\x1c\x89\x13", 6);
 
@@ -728,12 +740,12 @@ void LaserCalibrationController::processReceiverBuffer()
         if (start >= 0 && m_receiverBuffer.size() >= start + 40) {
             const QByteArray frame = m_receiverBuffer.mid(start, 40);
             m_receiverBuffer.remove(start, 40);
-            processLaserRangeFrame(frame);
+            processLaserRangeFrame(frame);//解析激光测距报文
             extracted = true;
             continue;
         }
         start = m_receiverBuffer.indexOf(snHeader);
-        if (start >= 0 && m_receiverBuffer.size() >= start + 144) {
+        if (start >= 0 && m_receiverBuffer.size() >= start + 144) {//解析SN报文
             const QByteArray frame = m_receiverBuffer.mid(start, 144);
             m_receiverBuffer.remove(start, 144);
             const QString sn = QString::fromLatin1(frame.mid(52, 9)).trimmed();
@@ -747,7 +759,7 @@ void LaserCalibrationController::processReceiverBuffer()
             extracted = true;
             continue;
         }
-        start = m_receiverBuffer.indexOf("$$SI");
+        start = m_receiverBuffer.indexOf("$$SI");//$$SI 硬件号报文
         if (start >= 0 && m_receiverBuffer.size() >= start + 62) {
             const QByteArray frame = m_receiverBuffer.mid(start, 62);
             m_receiverBuffer.remove(start, 62);
@@ -789,7 +801,7 @@ void LaserCalibrationController::processReceiverBuffer()
         data.replace('\0', ' ');
         const QString line = QString::fromUtf8(data).trimmed();
         if (!line.isEmpty())
-            processReceiverLine(line);
+            processReceiverLine(line);//检查文本中的关键字段，把解析结果保存
     }
     while (!m_receiverBuffer.isEmpty() && m_receiverBuffer.at(0) == '\0')
         m_receiverBuffer.remove(0, 1);
@@ -821,7 +833,7 @@ void LaserCalibrationController::processReceiverLine(const QString &line)
         }
         return;
     }
-
+    //设备信息
     QJsonParseError error;
     const QJsonDocument json = QJsonDocument::fromJson(line.toUtf8(), &error);
     if (error.error == QJsonParseError::NoError && json.isObject()) {
@@ -924,6 +936,11 @@ LaserCalibrationController::parseLaserBack(const QString &line) const
 
 void LaserCalibrationController::handleLaserBack(const LaserBack &report)
 {
+    appendLog(QStringLiteral(
+        "[面校准解析] 报文有效，面=%1，当前面状态=%2，六面掩码=0x%3，整机完成=%4，错误码=%5")
+                  .arg(report.panelId).arg(report.restState)
+                  .arg(report.restBits & 0x3f, 2, 16, QLatin1Char('0'))
+                  .arg(report.sideState).arg(report.errorCode));
     // $LASERBACK 的 restBits 是六个面的累计完成掩码。部分 SSCOM
     // 简化报文会在每一面都固定填写 1，因此还要根据“当前面已静置完成”
     // 补上对应位，并与本槽位已经完成的位合并，保证状态只增不减。
@@ -1038,7 +1055,7 @@ bool LaserCalibrationController::validateMeasurements(const QVariantMap &measure
 
 void LaserCalibrationController::beginNextSlot()
 {
-    continueIfNotPaused([this] {
+    continueIfNotPaused([this] {//是否暂停
         ++m_currentIndex;
         if (m_currentIndex >= m_slots.size()) {
             finishBatch();
@@ -1080,7 +1097,7 @@ void LaserCalibrationController::beginCurrentSlot()
     emit measurementChanged();
     updateSlotStatus(slot.tray, slot.slot, QStringLiteral("active"));
     setError(QString());
-
+    //拼接机械臂指令，左托盘使用 SETMOD1，右托盘使用 SETMOD2
     const QByteArray mode = slot.tray == QStringLiteral("left")
         ? QByteArray("$$MT,SETMOD1\r\n") : QByteArray("$$MT,SETMOD2\r\n");
     sendArm(mode);
@@ -1091,7 +1108,7 @@ void LaserCalibrationController::beginCurrentSlot()
         QTimer::singleShot(120, this, [this] {
             if (!m_running)
                 return;
-            sendArm("$$MT,NEXT\r\n");
+            sendArm("$$MT,NEXT\r\n");  //扫码
             setState(State::WaitingSn,
                      QStringLiteral("等待机械臂扫描 %1托盘 %2 号位")
                          .arg(m_slots.at(m_currentIndex).tray == QStringLiteral("left")
@@ -1184,6 +1201,8 @@ void LaserCalibrationController::requestPlanarCalibration(int face)
         failCurrentSlot(QStringLiteral("发送面校准指令失败"));
         return;
     }
+    appendLog(QStringLiteral("[面校准] 面 %1 指令发送成功，开始等待 $LASERBACK 结果")
+                  .arg(face));
     // WaitingFace2 后面紧接 WaitingPoint3，枚举并非完全等距，显式映射。
     State target = State::WaitingFace1;
     if (face == 2) target = State::WaitingFace2;
@@ -1245,11 +1264,11 @@ void LaserCalibrationController::startVisionMeasurement(VisionTarget target)
              kVisionTimeoutMs);
     appendLog(QStringLiteral("启动%1视觉测量，沿用旧版 1920×1080 摄像头与参考物参数")
                   .arg(name));
-    if (!m_vision.requestMeasurement(shortFocus)) {
+    if (!m_vision.requestMeasurement(shortFocus)) {//开始测量
         failCurrentSlot(QStringLiteral("摄像头正在处理上一项测量，请稍后重试"));
         return;
     }
-    emit cameraChanged();
+    emit cameraChanged();//发送信号
 }
 
 void LaserCalibrationController::handleVisionMeasurement(
@@ -1275,6 +1294,7 @@ void LaserCalibrationController::handleVisionMeasurement(
     m_stepTimer.stop();
     m_visionTarget = VisionTarget::None;
     if (!success) {
+        appendLog(QStringLiteral("[视觉算法] 本次测量失败：%1").arg(error));
         m_cameraStatus = QStringLiteral("视觉测量失败: %1").arg(error);
         emit cameraChanged();
         failCurrentSlot(m_cameraStatus);
@@ -1289,6 +1309,9 @@ void LaserCalibrationController::handleVisionMeasurement(
             m_laserDistance = 900.0;
     }
     if (!std::isfinite(m_laserDistance) || m_laserDistance <= 0.0) {
+        appendLog(QStringLiteral(
+            "[视觉/测距校验] 图像算法已成功，但激光测距值无效：%1")
+                      .arg(m_laserDistance, 0, 'f', 3));
         m_cameraStatus = QStringLiteral("视觉测量成功，但未收到有效激光测距报文");
         emit cameraChanged();
         failCurrentSlot(m_cameraStatus);
@@ -1332,7 +1355,7 @@ void LaserCalibrationController::handleVisionMeasurement(
         moveToPoint(4);
     } else {
         QString reason;
-        if (!calculateAngleInputs(&reason)) {
+        if (!calculateAngleInputs(&reason)) {    //计算角度参数
             failCurrentSlot(reason);
             return;
         }
@@ -1347,6 +1370,15 @@ bool LaserCalibrationController::calculateAngleInputs(QString *reason)
 {
     const double rangeDifference = std::abs(m_verticalFarRange
                                              - m_verticalCloseRange);
+    appendLog(QStringLiteral(
+        "[角度算法] 原始输入：垂直近点(视觉=%1,测距=%2)，垂直远点(视觉=%3,测距=%4)，水平远点(视觉=%5,测距=%6)，水平线高=%7")
+                  .arg(m_verticalCloseRawHeight, 0, 'f', 3)
+                  .arg(m_verticalCloseRange, 0, 'f', 3)
+                  .arg(m_verticalFarRawHeight, 0, 'f', 3)
+                  .arg(m_verticalFarRange, 0, 'f', 3)
+                  .arg(m_horizontalFarRawHeight, 0, 'f', 3)
+                  .arg(m_horizontalFarRange, 0, 'f', 3)
+                  .arg(m_horizontalLineHeight, 0, 'f', 3));
     if (m_verticalCloseRawHeight <= 0.0 || m_verticalFarRawHeight <= 0.0
         || m_horizontalFarRawHeight <= 0.0 || m_verticalCloseRange <= 0.0
         || m_verticalFarRange <= 0.0 || m_horizontalFarRange <= 0.0) {
@@ -1365,6 +1397,11 @@ bool LaserCalibrationController::calculateAngleInputs(QString *reason)
     const double sinB = std::abs(m_verticalCloseRange) / rangeDifference;
     const double heightDifference = std::abs(m_verticalFarRawHeight
                                                - m_verticalCloseRawHeight);
+    appendLog(QStringLiteral(
+        "[角度算法] 中间量计算成功：距离差=%1，高度差=%2，sinB=%3")
+                  .arg(rangeDifference, 0, 'f', 3)
+                  .arg(heightDifference, 0, 'f', 3)
+                  .arg(sinB, 0, 'f', 6));
     m_horizontalNear = m_horizontalLineHeight;
     m_horizontalFar = m_horizontalFarRawHeight;
     m_horizontalLength = m_horizontalFarRange;
@@ -1385,7 +1422,7 @@ bool LaserCalibrationController::calculateAngleInputs(QString *reason)
             return false;
         }
     }
-    emit measurementChanged();
+    emit measurementChanged(); //得到最终六个参数
     appendLog(QStringLiteral(
         "角度校准输入完成：水平[%1,%2,%3]，垂直[%4,%5,%6]")
                   .arg(m_horizontalNear, 0, 'f', 3)
@@ -1407,12 +1444,14 @@ void LaserCalibrationController::startAngleCalibration()
         .arg(m_verticalNear, 0, 'g', 15)
         .arg(m_verticalFar, 0, 'g', 15)
         .arg(m_verticalLength, 0, 'g', 15);
-    if (!sendReceiver(command.toUtf8())) {
+    if (!sendReceiver(command.toUtf8())) {  //发送完整laser参数
         failCurrentSlot(QStringLiteral("发送激光角度校准指令失败"));
         return;
     }
+    appendLog(QStringLiteral("[角度校准] 六参数指令发送成功，等待接收机返回最终 pitch/yaw/bias"));
     setState(State::WaitingAngle, QStringLiteral("等待激光角度校准最终结果"),
              kAngleTimeoutMs);
+
     if (m_vision.singleCameraDebug()) {
         appendLog(QStringLiteral(
             "模拟测试：使用默认外参 pitch=0.125000, yaw=-0.250000, "
@@ -1452,7 +1491,7 @@ void LaserCalibrationController::completeCurrentSlot(bool success, const QString
         updateSlotStatus(m_slots.at(m_currentIndex).tray,
                          m_slots.at(m_currentIndex).slot,
                          success ? QStringLiteral("success") : QStringLiteral("failed"));
-        addResult(success, reason);
+        addResult(success, reason);//保存数据
         m_currentResultRecorded = true;
     }
     m_receiverSocket.disconnectFromHost();
@@ -1625,7 +1664,7 @@ void LaserCalibrationController::addResult(bool success, const QString &reason)
         bias.append(value);
     row.insert(QStringLiteral("bias"), bias);
     m_results.append(row);
-    saveResultToDatabase(row);
+    saveResultToDatabase(row); //保存数据
     emit resultsChanged();
 }
 

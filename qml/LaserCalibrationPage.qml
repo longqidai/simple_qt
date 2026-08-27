@@ -18,18 +18,54 @@ ScrollView {
     property bool taskWasRunning: false
     signal switchToSlamRequested()
 
+    function syncLogHistory() {
+        var lines = controller && controller.logText
+                ? controller.logText.split("\n") : []
+        var followEnd = laserLogView.count === 0 || laserLogView.atYEnd
+        var oldPosition = laserLogView.contentY
+
+        if (laserLogModel.count + 1 === lines.length) {
+            laserLogModel.append({"message": lines[lines.length - 1]})
+        } else if (laserLogModel.count === lines.length && laserLogModel.count > 1
+                   && laserLogModel.get(1).message === lines[0]
+                   && laserLogModel.get(laserLogModel.count - 1).message !== lines[lines.length - 1]) {
+            laserLogModel.remove(0)
+            laserLogModel.append({"message": lines[lines.length - 1]})
+        } else {
+            laserLogModel.clear()
+            for (var i = 0; i < lines.length; ++i) {
+                if (lines[i] !== "")
+                    laserLogModel.append({"message": lines[i]})
+            }
+        }
+
+        Qt.callLater(function() {
+            if (followEnd)
+                laserLogView.positionViewAtEnd()
+            else
+                laserLogView.contentY = oldPosition
+        })
+    }
+
     ListModel { id: leftModel }
     ListModel { id: rightModel }
+    ListModel { id: laserLogModel }
 
     Component.onCompleted: {
         for (var i = 0; i < 10; ++i) {
             leftModel.append({"selected": false})
             rightModel.append({"selected": false})
         }
+        Qt.callLater(page.syncLogHistory)
     }
+
+    onControllerChanged: Qt.callLater(page.syncLogHistory)
 
     Connections {
         target: controller
+        function onLogChanged() {
+            page.syncLogHistory()
+        }
         function onRunningChanged() {
             if (!controller)
                 return
@@ -179,7 +215,12 @@ ScrollView {
                             onClicked: {
                                 if (!controller) return
                                 if (controller.armConnected) controller.disconnectArm()
+
+
+                               
                                 else controller.connectArm(armHost.text, parseInt(armPort.text))
+                            
+                            
                             }
                         }
                     }
@@ -451,22 +492,26 @@ ScrollView {
                     }
                     Rectangle {
                         Layout.preferredWidth: 540; Layout.fillHeight: true; radius: 8; color: "#f8fafc"; border.color: page.borderColor
-                        ScrollView {
+                        ListView {
+                            id: laserLogView
                             anchors.fill: parent; anchors.margins: 8; clip: true
-                            TextArea {
-                                id: logTextArea
-                                text: controller ? controller.logText : ""
-                                readOnly: true
-                                selectByMouse: true
-                                wrapMode: TextEdit.WrapAnywhere
+                            model: laserLogModel
+                            spacing: 2
+                            delegate: Label {
+                                width: laserLogView.width
+                                text: message
                                 color: page.textColor
                                 font.family: "Consolas"
                                 font.pixelSize: 11
-                                background: null
-                                onTextChanged: Qt.callLater(function() {
-                                    logTextArea.cursorPosition = logTextArea.length
-                                })
+                                wrapMode: Text.WrapAnywhere
                             }
+                            Label {
+                                anchors.centerIn: parent
+                                visible: laserLogModel.count === 0
+                                text: qsTr("暂无运行日志")
+                                color: "#98a2b3"
+                            }
+                            ScrollBar.vertical: ScrollBar { }
                         }
                     }
                 }

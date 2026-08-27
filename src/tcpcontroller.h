@@ -2,8 +2,10 @@
 #define TCPCONTROLLER_H
 
 #include <QByteArray>
+#include <QAbstractItemModel>
 #include <QObject>
 #include <QStringList>
+#include <QStringListModel>
 #include <QTcpSocket>
 #include <QTimer>
 #include <QUrl>
@@ -25,6 +27,7 @@ class TcpController : public QObject
     Q_PROPERTY(QString statusText READ statusText NOTIFY statusTextChanged)
     Q_PROPERTY(QString currentProgress READ currentProgress NOTIFY currentProgressChanged)
     Q_PROPERTY(QStringList debugLog READ debugLog NOTIFY debugLogChanged)
+    Q_PROPERTY(QAbstractItemModel *debugLogModel READ debugLogModel CONSTANT)
     Q_PROPERTY(QString host READ host WRITE setHost NOTIFY hostChanged)
     Q_PROPERTY(int port READ port WRITE setPort NOTIFY portChanged)
 
@@ -57,6 +60,7 @@ public:
     QString statusText() const;
     QString currentProgress() const;
     QStringList debugLog() const;
+    QAbstractItemModel *debugLogModel();
     QString host() const;
     int port() const;
 
@@ -98,6 +102,8 @@ signals:
     void statusTextChanged();
     void currentProgressChanged();
     void debugLogChanged();
+    void debugLogEntryAdded(const QString &entry);
+    void debugLogCleared();
     void hostChanged();
     void portChanged();
     void wifiNamePartChanged();
@@ -277,6 +283,7 @@ private:
     QString m_statusText;
     QString m_currentProgress;
     QStringList m_debugLog;
+    QStringListModel m_debugLogModel;
     QString m_host;
     int m_port;
     QByteArray m_armReceiveBuffer;
