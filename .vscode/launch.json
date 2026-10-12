@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "调试 simple_qt (GDB)",
+            "name": "Debug simple_qt (GDB)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}\\build-qmake-debug\\debug\\simple_qt.exe",
@@ -29,7 +29,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "构建 simple_qt (Debug)"
+            "preLaunchTask": "build-simple-qt-debug"
         }
     ]
 }

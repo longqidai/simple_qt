@@ -230,10 +230,18 @@ private:
     QTimer m_stepTimer;
     QTimer m_wifiTimer;
     QTimer m_receiverRetryTimer;
-    LaserVisionProcessor m_vision;
+    LaserVisionProcessor m_vision; //构造
 
     QByteArray m_armBuffer;
     QByteArray m_receiverBuffer;
+    // 当前面校准等待期间的诊断数据，不参与标定状态判定。
+    bool m_faceDiagnosticsActive = false;
+    qint64 m_faceRxBytes = 0;
+    int m_faceRxChunks = 0;
+    int m_faceValidReports = 0;
+    int m_faceInvalidReports = 0;
+    bool m_faceBufferWaitLogged = false;
+    QByteArray m_faceLastRx;
     State m_state = State::Idle;
     bool m_armReady = false;
     bool m_wifiConnected = false;

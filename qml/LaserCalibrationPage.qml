@@ -127,7 +127,7 @@ ScrollView {
         return selected ? primaryColor : "#cbd5e1"
     }
 
-    function startTask() {
+    function startTask() {        // 开始标定
         if (!controller) return
         controller.startCalibration(
             selectedSlots(leftModel), selectedSlots(rightModel), {
@@ -291,8 +291,8 @@ ScrollView {
                     GridLayout {
                         Layout.fillWidth: true; columns: 4; columnSpacing: 8; rowSpacing: 8
                         Label { text: "" }
-                        Label { text: qsTr("近点"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
-                        Label { text: qsTr("远点"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                        Label { text: qsTr("近点（固定）"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                        Label { text: qsTr("远点（单摄像头）"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
                         Label { text: qsTr("激光长度"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
                         Label { text: qsTr("水平测量"); color: page.textColor }
                         TextField { id: horizontalNear; Layout.fillWidth: true; text: controller && controller.horizontalNear !== 0 ? controller.horizontalNear.toFixed(3) : "--"; horizontalAlignment: Text.AlignHCenter; readOnly: true }

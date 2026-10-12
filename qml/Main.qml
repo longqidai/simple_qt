@@ -681,16 +681,16 @@ ApplicationWindow {
                                     Grid {
                                         anchors.centerIn: parent
                                         anchors.verticalCenterOffset: 12 * scaleFactor
-                                        columns: 4
-                                        rows: 2
-                                        spacing: 12 * scaleFactor
+                                        columns: 2
+                                        rows: 4
+                                        spacing: 10 * scaleFactor
 
                                         Repeater {
                                             model: trayDelegate.selectionModel
                                             Rectangle {
                                                 property string visualState: window.visualSlotState(trayDelegate.sideName, index, selected)
-                                                width: Math.max(48 * scaleFactor, Math.min(68 * scaleFactor, (trayDelegate.width - 88 * scaleFactor) / 4))
-                                                height: 62 * scaleFactor
+                                                width: Math.max(58 * scaleFactor, Math.min(88 * scaleFactor, (trayDelegate.width - 52 * scaleFactor) / 2))
+                                                height: 52 * scaleFactor
                                                 radius: 9 * scaleFactor
                                                 color: window.slotFillColor(visualState)
                                                 border.width: visualState === "idle" ? 1 : 2
@@ -810,8 +810,16 @@ ApplicationWindow {
                                     stopDialog.open()
                                 } else {
                                     
+
+
+
+
                                     tcpController.toggleArmTask(window.selectedSlots(leftSelection),
                                                                 window.selectedSlots(rightSelection))
+
+
+
+                                                                
                                 }
                             }
                             background: Rectangle {

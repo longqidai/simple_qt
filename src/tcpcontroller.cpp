@@ -46,7 +46,7 @@ const int kCollectTimeoutMs = 20000;
 const int kCollectRecoveryMaxAttempts = 3;
 const int kCollectRecoverySettleMs = 5000;
 const int kArmHomeTimeoutMs = 120000;
-const int kCalibrationTimeoutMs = 10 * 60 * 1000;
+const int kCalibrationTimeoutMs = 5 * 60 * 1000;
 const int kStopCollectTimeoutMs = 30000;
 const int kModelingStopTimeoutMs = 5 * 60 * 1000;
 const int kPutBackTimeoutMs = 120000;
@@ -274,6 +274,7 @@ TcpController::TcpController(QObject *parent)
     , m_guaranteedStopActive(false)
     , m_guaranteedStopAfterAbort(false)
     , m_guaranteedStopNeedsPutBack(false)
+    , m_manualRecoveryRequired(false)
     , m_guaranteedStopAttempts(0)
     , m_workflowGeneration(0)
     , m_statusText(QStringLiteral("未连接"))
@@ -297,7 +298,7 @@ TcpController::TcpController(QObject *parent)
 
     , m_mqttHost(QStringLiteral("192.168.1.8")) //mqtt 地址
     , m_mqttPort(1883)
-    , m_mqttPortCandidates({1883, 26001})
+    , m_mqttPortCandidates({1883, 26001})//1883：标准 MQTT TCP 端口。26001：设备可能使用的自定义 MQTT 端口。
 
     , m_mqttPortCandidateIndex(0)
     , m_mqttPortFailureCount(0)
@@ -343,10 +344,13 @@ TcpController::TcpController(QObject *parent)
     connect(m_deviceSocket,
             static_cast<void (QTcpSocket::*)(QAbstractSocket::SocketError)>(&QTcpSocket::error),
             this, &TcpController::onDeviceError);
-        //wifi状态定时器
+
+
+    //wifi状态定时器
     m_wifiStatusTimer.setInterval(1500);
     connect(&m_wifiStatusTimer, &QTimer::timeout, this, &TcpController::checkWifiConnection);
     m_wifiStatusTimer.start();
+
 
     m_deviceRetryTimer.setSingleShot(true);
     //checkWifiConnection()中会在wifi连接后启动设备tcp连接，若失败则会启动定时器重试
@@ -356,6 +360,9 @@ TcpController::TcpController(QObject *parent)
             connectDeviceTcp();
         }
     });
+
+
+
     //mqtt连接超时自动重试
     m_mqttReconnectTimer.setSingleShot(true);
     connect(&m_mqttReconnectTimer, &QTimer::timeout, this, [this]() {
@@ -372,17 +379,21 @@ TcpController::TcpController(QObject *parent)
         m_mqttClient->connectToHost();
     });
 
+
     m_handshakeTimer.setSingleShot(true);
     connect(&m_handshakeTimer, &QTimer::timeout, this, &TcpController::onHandshakeTimeout);
     //处理超时
+
     m_stepTimer.setSingleShot(true);
     connect(&m_stepTimer, &QTimer::timeout, this, &TcpController::onStepTimeout);
+
     //配置mqtt客户端
     m_mqttClient->setHostname(m_mqttHost);
     m_mqttClient->setPort(static_cast<quint16>(m_mqttPort));
     m_mqttClient->setProtocolVersion(QMqttClient::MQTT_3_1_1);
     m_mqttClient->setClientId(QStringLiteral("slam-calib-%1")
                                   .arg(QDateTime::currentMSecsSinceEpoch()));
+
     //监听变化
     connect(m_mqttClient, &QMqttClient::stateChanged, this,
             [this](QMqttClient::ClientState state) {
@@ -433,7 +444,7 @@ TcpController::TcpController(QObject *parent)
                     return;
                 setFlowState(FlowState::WaitingDeviceReady,
                              QStringLiteral("MQTT 已连接，等待设备初始化完成"),
-                             kDeviceReadyTimeoutMs);
+                             kDeviceReadyTimeoutMs);       //状态机变化
                 appendLog(QStringLiteral("等待设备状态 init_ready=1 后再启动扫描流程"));
                 if (m_deviceStatusReceived && m_deviceInitReady) {
                     appendLog(QStringLiteral("已缓存设备状态 init_ready=1，直接创建扫描工程"));
@@ -461,11 +472,14 @@ TcpController::TcpController(QObject *parent)
             scheduleWorkflowAction(300, [this]() { resumeMqttOperation(); });
         }
     });
+
+
     //mqtt  消息信号
     connect(m_mqttClient, &QMqttClient::messageReceived, this,
             [this](const QByteArray &message, const QMqttTopicName &topic) {
         handleMqttMessage(message, topic.name());
     });
+
 
     connect(m_mqttClient, &QMqttClient::errorChanged, this,
             [this](QMqttClient::ClientError error) {
@@ -508,12 +522,17 @@ TcpController::TcpController(QObject *parent)
         }
     });
 
+
+
+
+//ftp信号槽
     connect(m_ftpProcess,
             static_cast<void (QProcess::*)(int, QProcess::ExitStatus)>(&QProcess::finished),
             this,
             [this](int exitCode, QProcess::ExitStatus exitStatus) {
         handleFtpProcessFinished(exitCode, static_cast<int>(exitStatus));
     });
+
 
     connect(m_ftpProcess, &QProcess::errorOccurred, this,
             [this](QProcess::ProcessError error) {
@@ -846,7 +865,7 @@ void TcpController::handleArmCommand(const QString &command)
         m_handshakeTimer.stop();
         if (!m_armReady) {
             m_armReady = true;
-            emit armReadyChanged();
+            emit armReadyChanged();//更新状态
         }
         appendLog(QStringLiteral("机械臂协议握手成功"));
         if (m_taskActive) {
@@ -878,13 +897,37 @@ void TcpController::handleArmCommand(const QString &command)
     
     if (normalized.contains(QStringLiteral("HOMEOK"))) {
         m_armAtHomeReady = true;
-        appendLog(QStringLiteral("机械臂已夹取设备、回到 Home 并完成静置（HOMEOK）"));
+        appendLog(QStringLiteral("机械臂已夹取设备并到达 P100 采集起点（HOMEOK）"));
         tryStartModelingWhenArmHome();
         return;
     }
 
-    if (normalized.contains(QStringLiteral("SCANREADYOK"))) {
+    if (normalized.contains(QStringLiteral("SCANREADYOK"))) {//机械臂轨迹执行完成真正接下来的流程在下面
         appendLog(QStringLiteral("机械臂已收到设备真实扫描就绪通知，开始执行 SLAM 标定轨迹"));
+        return;
+    }
+
+    if (normalized.startsWith(QStringLiteral("MT,FAILED,MOTION,"))
+        || normalized == QStringLiteral("MT,FAILED,MANUAL_RECOVERY")) {
+        const QString reason = QStringLiteral("机械臂运动到位未确认，禁止自动放回；请现场检查并人工恢复：%1")
+                                   .arg(command);
+        stopStepTimer();
+        setCurrentSlotState(QStringLiteral("failed"));
+        setLastError(reason);
+        recordCurrentResult(QStringLiteral("failed"), reason);
+        appendLog(reason);
+        m_aborting = true;
+        m_manualRecoveryRequired = true;
+        // 即使此前已因五分钟超时进入兜底停止，也必须撤销自动放回请求。
+        if (m_guaranteedStopActive) {
+            m_guaranteedStopNeedsPutBack = false;
+            m_guaranteedStopAfterAbort = true;
+            m_guaranteedStopReason = reason;
+        }
+        if (m_guaranteedStopActive || measurementMayBeActive())
+            beginGuaranteedMeasurementStop(true, false, reason);
+        else
+            completeAbortedWorkflow(reason, false);
         return;
     }
 
@@ -897,25 +940,40 @@ void TcpController::handleArmCommand(const QString &command)
             setCurrentSlotState(QStringLiteral("failed"));
             setLastError(QStringLiteral("机械臂放回设备失败"));
             recordCurrentResult(QStringLiteral("failed"), m_lastError);
-            if (m_aborting)
-                completeAbortedWorkflow(QStringLiteral("任务已中止，机械臂放回设备失败"));
-            else
-                scheduleWorkflowAction(0, [this]() { startNextSlot(); });
+            m_manualRecoveryRequired = true;
+            m_aborting = true;
+            completeAbortedWorkflow(
+                QStringLiteral("机械臂放回失败，位置未确认；禁止下一槽位，请人工恢复"), false);
         } else {
             failCurrentSlot(QStringLiteral("机械臂报告失败: %1").arg(command));
         }
         return;
     }
 
-    if (normalized.contains(QStringLiteral("RUNFINISH"))) {
+    if (normalized.contains(QStringLiteral("TRAJECTORYFINISH"))) {
+        appendLog(QStringLiteral("机械臂已到达 SLAM 标定轨迹终点，立即结束设备采集；后续回 Home 不计入采集数据"));
+        if (m_flowState == FlowState::Calibrating && m_modelingStatus == 5) {
+            setProgress(QStringLiteral("标定轨迹已完成，正在停止原始数据记录"));
+            if (!publishCollectAction(QStringLiteral("AC_STOP")))
+                failCurrentSlot(QStringLiteral("标定轨迹完成后无法通知设备停止原始数据记录"));
+        } else if (m_flowState != FlowState::StoppingCollection
+                   && m_flowState != FlowState::StoppingModeling
+                   && m_flowState != FlowState::EnsuringMeasurementStopped
+                   && m_flowState != FlowState::WaitingPutBack) {
+            appendLog(QStringLiteral("收到轨迹终点通知，但设备当前不在同步采集状态；等待后续状态确认"));
+        }
+        return;
+    }
+
+    if (normalized.contains(QStringLiteral("RUNFINISH"))) { //机械臂安全回程执行完成
         if (m_armMotionStarted && !m_armMotionFinished) {
             m_armMotionFinished = true;
-            appendLog(QStringLiteral("机械臂标定轨迹执行完成"));
+            appendLog(QStringLiteral("机械臂标定轨迹及安全回程执行完成"));
         }
         if (m_flowState == FlowState::Calibrating && m_modelingStatus == 5) {
-            appendLog(QStringLiteral("机械臂轨迹和设备真实扫描均已启动，停止并保存本次扫描"));
-            if (!publishModelingAction(false))//发送AC_STOP
-                failCurrentSlot(QStringLiteral("无法通知设备停止真实扫描"));
+            appendLog(QStringLiteral("兼容旧机械臂协议：收到 RUNFINISH 后停止原始数据记录，再停止并保存真实扫描"));
+            if (!publishCollectAction(QStringLiteral("AC_STOP")))
+                failCurrentSlot(QStringLiteral("无法通知设备停止标定原始数据记录"));
         } else if (m_armMotionFinished
                    && m_flowState != FlowState::StoppingModeling
                    && m_flowState != FlowState::StoppingCollection
@@ -939,15 +997,15 @@ void TcpController::handleArmCommand(const QString &command)
         } else {
             if (!m_failureAwaitingPutBack
                 && currentSlotState() != QStringLiteral("waiting_download"))
-                markCurrentSuccess();
-            scheduleWorkflowAction(0, [this]() { startNextSlot(); });//下一个槽位
+                markCurrentSuccess(); //标记测量成功
+            scheduleWorkflowAction(0, [this]() { startNextSlot(); });//把 startNextSlot() 放入 Qt 事件队列，延迟 0 毫秒执行，也就是当前函数处理完后开始下一个槽位
         }
         return;
     }
 
     if (normalized.contains(QStringLiteral("STARTOK"))) {
         if (m_armMotionStarted) {
-            appendLog(QStringLiteral("机械臂已确认启动（STARTOK），正在夹取设备并返回 Home 静置"));
+            appendLog(QStringLiteral("机械臂已确认启动（STARTOK），正在夹取设备并前往 P100"));
         } else {
             appendLog(QStringLiteral("收到机械臂 STARTOK，但本槽位尚未记录启动指令，仅记录该响应"));
         }
@@ -960,6 +1018,13 @@ void TcpController::handleArmCommand(const QString &command)
 
 void TcpController::beginTask(const QVariantList &leftSlots, const QVariantList &rightSlots)
 {
+    if (m_manualRecoveryRequired) {
+        const QString warning = QStringLiteral(
+            "机械臂运动未确认，禁止开始新批次；请现场人工恢复机械臂后重启上位机");
+        appendLog(warning);
+        setProgress(warning);
+        return;
+    }
     if (!m_connected || !m_armReady) {
         appendLog(QStringLiteral("机械臂尚未完成握手，不能开始标定"));
         setProgress(QStringLiteral("请先完成机械臂连接和握手"));
@@ -1277,7 +1342,7 @@ void TcpController::startNextDeferredDownload()
         return;
     }
 
-    finishTask();
+    finishTask();//最后全部下载完调用
 }
 
 void TcpController::failCurrentDownload(const QString &reason)
@@ -1327,13 +1392,28 @@ void TcpController::failCurrentSlot(const QString &reason)
     setFlowState(FlowState::Recovering, failureProgress);
     appendLog(QStringLiteral("当前槽位标定失败: %1").arg(reason));
 
+    if (failedState == FlowState::Calibrating) {
+        // 轨迹仍可能在执行，未确认回到 Home 前不能发放回或进入下一槽位。
+        m_manualRecoveryRequired = true;
+        m_aborting = true;
+        appendLog(QStringLiteral("机械臂轨迹中断，禁止自动放回和继续下一槽位；请人工确认位置"));
+        if (measurementMayBeActive())
+            beginGuaranteedMeasurementStop(true, false, reason);
+        else
+            completeAbortedWorkflow(reason, false);
+        return;
+    }
+
     if (measurementMayBeActive()) {
         beginGuaranteedMeasurementStop(false, stateNeedsPutBack(failedState), reason);
         return;
     }
 
     if (failedState == FlowState::WaitingPutBack) {
-        scheduleWorkflowAction(0, [this]() { startNextSlot(); });
+        m_manualRecoveryRequired = true;
+        m_aborting = true;
+        completeAbortedWorkflow(
+            QStringLiteral("机械臂放回未确认；禁止下一槽位，请人工检查"), false);
     } else if (stateNeedsPutBack(failedState)) {
         requestPutBack(true);
     } else {
@@ -1441,16 +1521,13 @@ void TcpController::requestPutBack(bool afterFailure)
 {
     m_failureAwaitingPutBack = afterFailure;
     if (!sendArmCommand(QStringLiteral("$$MT,PUTBACK"))) {
-        if (m_aborting) {
-            completeAbortedWorkflow(QStringLiteral("任务已中止，机械臂放回指令发送失败"));
-        } else {
-            if (!afterFailure) {
-                setCurrentSlotState(QStringLiteral("failed"));
-                setLastError(QStringLiteral("机械臂放回指令发送失败"));
-                recordCurrentResult(QStringLiteral("failed"), m_lastError);
-            }
-            scheduleWorkflowAction(0, [this]() { startNextSlot(); });
-        }
+        setCurrentSlotState(QStringLiteral("failed"));
+        setLastError(QStringLiteral("机械臂放回指令发送失败，设备可能仍被夹持"));
+        recordCurrentResult(QStringLiteral("failed"), m_lastError);
+        m_manualRecoveryRequired = true;
+        m_aborting = true;
+        completeAbortedWorkflow(
+            QStringLiteral("机械臂放回指令未送达；禁止下一槽位，请人工恢复"), false);
         return;
     }
     setFlowState(FlowState::WaitingPutBack,
@@ -1477,11 +1554,10 @@ void TcpController::handleScannedSn(const QString &sn)
     emit currentDeviceChanged();
     emit wifiNamePartChanged();
     appendLog(QStringLiteral("扫描到设备 SN: %1").arg(cleanSn));
-    // Do not let the arm pick up the device yet.  Wi-Fi, device TCP, MQTT,
-    // project/task setup, preinitialization and the raw collection directory
-    // are all validated while the device remains in its tray slot.  Only a
-    // confirmed "collecting" response is allowed to release $$MT,START.
-    appendLog(QStringLiteral("扫码完成：设备暂留托盘，先检查 Wi-Fi、MQTT 和采集目录"));
+    // Do not let the arm pick up the device yet. Wi-Fi, device TCP, MQTT,
+    // project/task setup and preinitialization are validated while it remains
+    // in the tray. Raw collection starts only after the arm reaches P100.
+    appendLog(QStringLiteral("扫码完成：设备暂留托盘，先检查 Wi-Fi、MQTT、工程和扫描预初始化"));
     setFlowState(FlowState::ConnectingWifi,
                  QStringLiteral("正在连接设备 Wi-Fi；检查通过前机械臂不会抓取：%1").arg(cleanSn),
                  kWifiTimeoutMs);
@@ -1600,11 +1676,11 @@ void TcpController::checkWifiConnection()
                 });
                 return;
             }
-            setFlowState(FlowState::ConnectingDevice,
+            setFlowState(FlowState::ConnectingDevice,   //连接设备
                          QStringLiteral("设备 Wi-Fi 已连接，等待网络地址就绪"),
                          kDeviceConnectTimeoutMs);
             appendLog(QStringLiteral("等待 DHCP/路由就绪后连接设备信息端口"));
-            m_deviceRetryTimer.start(2500);//启动tcp定时器，触发回调
+            m_deviceRetryTimer.start(2500);     //启动tcp定时器，触发回调，触发connectdevicetcp
         } else {
             ++m_wifiConnectTicks;
             if (m_wifiConnectTicks % 3 == 0)
@@ -2033,14 +2109,14 @@ void TcpController::resumeMqttOperation()
 bool TcpController::subscribeMqttTopics()
 {
     const QVector<QPair<QString, quint8>> topics{
-        {QStringLiteral("slam_app/report/device_status"), 0},
+        {QStringLiteral("slam_app/report/device_status"), 0},   //周期性上报，不断发送
         {QStringLiteral("slam_app/response/project"), 1},
         {QStringLiteral("slam_app/response/task"), 1},
         {QStringLiteral("slam_app/response/modeling"), 1},
-        {QStringLiteral("slam_app/report/modeling"), 0},
+        {QStringLiteral("slam_app/report/modeling"), 0},        //周期性上报，不断发送
         {QStringLiteral("slam_app/response/data_collect"), 1}
     };
-
+    //订阅成功发出messageRecieved信号，触发handleMqttMessage处理
     bool allSubscribed = true;
     for (const auto &entry : topics) {
         QMqttSubscription *subscription = m_mqttClient->subscribe(
@@ -2080,14 +2156,14 @@ bool TcpController::publishProjectCreate()
     appendProtoBytes(payload, 4, projectName.toUtf8());
     appendProtoBytes(payload, 5, QStringLiteral("SLAM calibration").toUtf8());
 
-    const qint32 messageId = m_mqttClient->publish(
+    const qint32 messageId = m_mqttClient->publish(  //发布主题
         QMqttTopicName(QStringLiteral("app_slam/request/project")), payload, 1, false);
         //设备回复slam_app/response/project，给handleMqttProjectResponse处理
         if (messageId < 0)
         return false;
     appendLog(QStringLiteral("MQTT 创建扫描工程 %1，消息 ID=%2")
                   .arg(projectName).arg(messageId));
-    setFlowState(FlowState::CreatingProject,
+    setFlowState(FlowState::CreatingProject, //状态机更新
                  QStringLiteral("正在创建设备扫描工程"),
                  kProjectTimeoutMs);
     return true;
@@ -2100,7 +2176,7 @@ bool TcpController::publishTaskCreate()
 
     QByteArray payload;
     appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
-    appendProtoUInt(payload, 2, 7); // Application.AC_ADD
+    appendProtoUInt(payload, 2, 7); // Application.AC_ADD新增任务
     appendProtoSInt(payload, 3, m_modelingProjectId);
     const QString taskName = QStringLiteral("CAL_%1_%2")
                                  .arg(m_currentSn.isEmpty() ? QStringLiteral("DEVICE") : m_currentSn)
@@ -2109,9 +2185,9 @@ bool TcpController::publishTaskCreate()
     appendProtoBytes(payload, 5, taskName.toUtf8());
     appendProtoBytes(payload, 6, QByteArrayLiteral("simple_qt"));
 
-    const qint32 messageId = m_mqttClient->publish(
+    const qint32 messageId = m_mqttClient->publish( //发布主题
         QMqttTopicName(QStringLiteral("app_slam/request/task")), payload, 1, false);
-    if (messageId < 0)
+    if (messageId < 0)//设备返回slam_app/response/task，给handleMqttTaskResponse处理
         return false;
     appendLog(QStringLiteral("MQTT 创建扫描任务 %1，工程 ID=%2，消息 ID=%3")
                   .arg(taskName).arg(m_modelingProjectId).arg(messageId));
@@ -2136,7 +2212,7 @@ bool TcpController::publishModelingPreinit()
         appendProtoUInt(payload, 6, static_cast<quint32>(m_modelingProjectId));
     appendProtoUInt(payload, 7, 0); // No Ntrip/RTK initialization.
 
-    const qint32 messageId = m_mqttClient->publish(
+    const qint32 messageId = m_mqttClient->publish(//发布主题，动作是AC_PREINIT，设备返回slam_app/response/modeling，给handleMqttModelingResponse处理
         QMqttTopicName(QStringLiteral("app_slam/request/modeling")), payload, 1, false);
     if (messageId < 0)
         return false;
@@ -2154,10 +2230,10 @@ bool TcpController::publishModelingAction(bool start, bool updateFlow)
     if (m_mqttClient->state() != QMqttClient::Connected || m_modelingTaskId <= 0)
         return false;
 
-    QByteArray payload;
+    QByteArray payload;//二进制字节数组,接下来写入指令
     appendProtoBytes(payload, 1, makeProtoHeader(++m_protoSequence, m_protoSessionId));
     appendProtoUInt(payload, 2, start ? 1 : 2); // AC_START / AC_STOP
-    appendProtoUInt(payload, 3, static_cast<quint32>(m_modelingTaskId));
+    appendProtoUInt(payload, 3, static_cast<quint32>(m_modelingTaskId));//转换成Qt的32位整数
     //写入扫描任务开始/ 停止命令
     if (start) {
         appendProtoUInt(payload, 4, 2); // 扫描记录模式
@@ -2166,7 +2242,7 @@ bool TcpController::publishModelingAction(bool start, bool updateFlow)
             appendProtoUInt(payload, 6, static_cast<quint32>(m_modelingProjectId));
         appendProtoUInt(payload, 7, 0); // No Ntrip/RTK initialization.
     }
-    //发布消息给客户端
+    //发布消息给客户端,响应slam_app/report/modeling
     const qint32 messageId = m_mqttClient->publish(
         QMqttTopicName(QStringLiteral("app_slam/request/modeling")), payload, 1, false);
     if (messageId < 0)
@@ -2179,7 +2255,7 @@ bool TcpController::publishModelingAction(bool start, bool updateFlow)
                   .arg(m_modelingTaskId).arg(m_modelingProjectId).arg(messageId));
     if (updateFlow) {
         if (start) {
-            setFlowState(FlowState::StartingModeling,
+            setFlowState(FlowState::StartingModeling,//更行状态机
                          QStringLiteral("设备正在启动传感器和 SLAM 扫描"),
                          kModelingStartTimeoutMs);
         } else {
@@ -2196,8 +2272,8 @@ bool TcpController::publishCollectAction(const QString &action, bool updateFlow)
     if (m_mqttClient->state() != QMqttClient::Connected)
         return false;
     const QMqttTopicName topic(QStringLiteral("app_slam/request/data_collect"));
-    //构造json报文,发布给data_collect，设备返回slam_app/response/data_collect，给handleMqttCollectResponse处理
-    const QJsonObject object{{QStringLiteral("action"), action}};
+    //构造json报文,发布给data_collect，设备返回slam_app/response/data_collect，给handleMqttCollectResponse处理//"desc": "collecting",
+    const QJsonObject object{{QStringLiteral("action"), action}};                                        //"path": "/data/collect/..."
     const QByteArray payload = QJsonDocument(object).toJson(QJsonDocument::Compact);
     const qint32 messageId = m_mqttClient->publish(topic, payload, 1, false);
     if (messageId < 0)
@@ -2211,7 +2287,7 @@ bool TcpController::publishCollectAction(const QString &action, bool updateFlow)
     appendLog(QStringLiteral("MQTT 发布 %1，消息 ID=%2").arg(action).arg(messageId));
     if (updateFlow) {
         if (action == QStringLiteral("AC_START")) {
-            setFlowState(FlowState::StartingCollection,
+            setFlowState(FlowState::StartingCollection,//状态机更新
                          QStringLiteral("正在开启标定原始数据记录"),
                          kCollectTimeoutMs);
         } else {
@@ -2225,26 +2301,29 @@ bool TcpController::publishCollectAction(const QString &action, bool updateFlow)
 
 void TcpController::tryStartModelingWhenArmHome()
 {
-    //完成静止并且目录建立成功
+    // HOMEOK means that the arm is holding the device at P100.  Start the
+    // complete modeling pipeline here.  Modeling AC_START is what opens the
+    // lidar/cameras and initializes SLAM; data_collect is only enabled after
+    // EC_ScanScanning so the calibration directory does not contain a long
+    // pre-roll while the scan modules are still initializing.
     if (!m_taskActive || m_aborting || m_guaranteedStopActive
-        || !m_collectReadyForModeling || !m_armAtHomeReady
-        || (m_flowState != FlowState::StartingCollection
-            && m_flowState != FlowState::WaitingArmHome)) {
+        || !m_armAtHomeReady
+        || m_flowState != FlowState::WaitingArmHome) {
         return;
     }
 
     if (m_mqttClient->state() != QMqttClient::Connected || !m_mqttSubscribed) {
         setFlowState(FlowState::WaitingArmHome,
-                     QStringLiteral("机械臂已在 Home 静置，等待 MQTT 恢复后启动真实扫描"),
+                     QStringLiteral("机械臂已在 P100，等待 MQTT 恢复后启动同步采集"),
                      kArmHomeTimeoutMs);
         scheduleMqttReconnect();
         return;
     }
 
     stopStepTimer();
-    appendLog(QStringLiteral("机械臂和原始采集均已准备完成，设备保持静止，开始真实扫描初始化"));
+    appendLog(QStringLiteral("P100 已到位，发送 modeling AC_START，启动雷达、相机和 SLAM 扫描"));
     if (!publishModelingAction(true))//向设备发送START
-        failCurrentSlot(QStringLiteral("机械臂回到 Home 后无法启动设备真实扫描"));
+        failCurrentSlot(QStringLiteral("机械臂到达 P100 后无法启动设备真实扫描"));
 }
 
 void TcpController::retryCollectStartAfterStop()
@@ -2389,6 +2468,7 @@ void TcpController::finishGuaranteedMeasurementStop()
     stopStepTimer();
     const bool afterAbort = m_guaranteedStopAfterAbort;
     const bool needsPutBack = m_guaranteedStopNeedsPutBack;
+    const bool manualRecovery = m_manualRecoveryRequired;
     m_guaranteedStopActive = false;
     m_guaranteedStopAfterAbort = false;
     m_guaranteedStopNeedsPutBack = false;
@@ -2405,7 +2485,10 @@ void TcpController::finishGuaranteedMeasurementStop()
         completeAbortedWorkflow(
             needsPutBack && (!m_connected || !m_armReady)
                 ? QStringLiteral("设备测量已停止，但机械臂连接中断，无法确认放回")
-                : QStringLiteral("任务已中止，设备测量已确认停止"));
+                : (manualRecovery
+                       ? QStringLiteral("设备测量已停止；机械臂未确认到位，禁止自动放回，请人工恢复")
+                       : QStringLiteral("任务已中止，设备测量已确认停止")),
+            !manualRecovery);
         return;
     }
 
@@ -2418,6 +2501,7 @@ void TcpController::abortAfterGuaranteedStopTimeout(const QString &reason)
         return;
 
     const bool needsPutBack = m_guaranteedStopNeedsPutBack;
+    const bool manualRecovery = m_manualRecoveryRequired;
     appendLog(QStringLiteral("设备停止确认已达到 %1 次上限，本地工作流将复位，避免上位机永久卡死")
                   .arg(kGuaranteedStopMaxAttempts));
     appendLog(QStringLiteral("安全警告：未收到设备停止确认；再次操作前请人工确认设备已停止测量"));
@@ -2438,12 +2522,12 @@ void TcpController::abortAfterGuaranteedStopTimeout(const QString &reason)
         requestPutBack(true);
         return;
     }
-    completeAbortedWorkflow(reason);
+    completeAbortedWorkflow(reason, !manualRecovery);
 }
 
 void TcpController::handleMqttMessage(const QByteArray &message, const QString &topic)
 {
-    if (topic == QStringLiteral("slam_app/report/device_status")) {
+    if (topic == QStringLiteral("slam_app/report/device_status")) { //周期性上报设备状态，订阅完立刻发送
         handleDeviceStatusReport(message);
         return;
     }
@@ -2459,7 +2543,7 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
         handleModelingResponse(message);
         return;
     }
-    if (topic == QStringLiteral("slam_app/report/modeling")) {
+    if (topic == QStringLiteral("slam_app/report/modeling")) { //0
         handleModelingReport(message);
         return;
     }
@@ -2530,14 +2614,33 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
                                          && description.contains(QStringLiteral("collect dir"),
                                                                  Qt::CaseInsensitive);
     if (m_flowState == FlowState::StartingCollection && collectDirectoryFailure) {
-        // error=3 with an empty path means AC_START never created a session.
-        // The robot is deliberately still waiting at the scan position, so
-        // mark this slot failed and scan the next one without pick/put-back.
         m_collectActive = false;
-        m_retryCollectAfterStop = false;
         m_collectStatus = QStringLiteral("设备存储目录创建失败");
         emit collectStatusChanged();
-        appendLog(QStringLiteral("采集目录创建失败，设备尚未被抓取；跳过当前槽位并直接扫描下一设备"));
+
+        // Some device versions transiently return error=3 while the previous
+        // collection directory/file handles are still being released.  The
+        // request format is correct (AC_START has no path parameter), so give
+        // the device a bounded recovery window before rejecting the unit.
+        if (m_collectStartRecoveryAttempts < kCollectRecoveryMaxAttempts) {
+            ++m_collectStartRecoveryAttempts;
+            m_retryCollectAfterStop = true;
+            appendLog(QStringLiteral(
+                "采集目录创建失败；发送 AC_STOP 清理残留会话，静置后重试（%1/%2）")
+                          .arg(m_collectStartRecoveryAttempts)
+                          .arg(kCollectRecoveryMaxAttempts));
+
+            // Best effort only: error=3 with an empty path means no usable
+            // collection session exists, so recovery must not depend on an
+            // AC_STOP response that older firmware may omit.
+            publishCollectAction(QStringLiteral("AC_STOP"), false);
+            retryCollectStartAfterStop();
+            return;
+        }
+
+        m_retryCollectAfterStop = false;
+        appendLog(QStringLiteral("采集目录连续 %1 次恢复仍失败；停止测量并放回当前设备")
+                      .arg(kCollectRecoveryMaxAttempts));
         failCurrentSlot(QStringLiteral("设备采集失败，错误码 %1：%2")
                             .arg(errorCode).arg(description));
         return;
@@ -2569,36 +2672,28 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
         m_collectStatus = QStringLiteral("采集中");
         m_collectActive = true;
         emit collectStatusChanged();
-        if (m_flowState == FlowState::StartingCollection
-            || m_flowState == FlowState::WaitingArmHome) {
+        if (m_flowState == FlowState::StartingCollection) {
             stopStepTimer();
             m_collectReadyForModeling = true;
             if (alreadyCollecting)
                 appendLog(QStringLiteral("设备已处于采集状态，按幂等成功继续流程"));
 
-            // This is the first point at which the device is allowed to leave
-            // its tray slot: networking, MQTT setup and raw collection have
-            // all succeeded and the collection directory now exists.
-            if (!m_armMotionStarted) {
-                if (!sendArmCommand(QStringLiteral("$$MT,START"))) {//发送START给机械臂,返回STARTOK和HOMEOK
-                    failCurrentSlot(QStringLiteral("设备检查通过，但无法通知机械臂抓取设备"));
-                    return;
-                }
-                m_armMotionStarted = true;
-                m_armMotionFinished = false;
-                appendLog(QStringLiteral("设备 Wi-Fi、MQTT 与采集目录检查通过，允许机械臂抓取并返回 Home"));
+            if (!m_armAtHomeReady || !m_modelingActive || m_modelingStatus != 5) {
+                failCurrentSlot(QStringLiteral("原始数据记录已启动，但设备真实扫描或 P100 状态无效"));
+            } else if (m_armMotionFinished) {
+                failCurrentSlot(QStringLiteral("原始数据记录启动过晚：机械臂轨迹已经结束"));
+            } else if (!sendArmCommand(QStringLiteral("$$MT,SCANREADY"))) {
+                failCurrentSlot(QStringLiteral("原始数据记录已启动，但无法通知机械臂执行标定轨迹"));
+            } else {
+                appendLog(QStringLiteral("真实扫描和原始记录均已就绪，发送 SCANREADY 释放 SLAM 标定轨迹"));
+                setFlowState(FlowState::Calibrating,
+                             QStringLiteral("设备正在同步记录，机械臂开始执行 SLAM 标定轨迹"),
+                             kCalibrationTimeoutMs);
             }
-            if (!m_armAtHomeReady) {
-                setFlowState(FlowState::WaitingArmHome,
-                             QStringLiteral("原始采集已就绪，等待机械臂夹取设备并回到 Home 静置"),
-                             kArmHomeTimeoutMs);
-                appendLog(QStringLiteral("原始采集准备完成，暂不启动真实扫描；等待机械臂 HOMEOK"));
-            }
-            tryStartModelingWhenArmHome();
         }
         return;
     }
-
+//如果包含collect stopped，说明采集已经停止                      //忽略大小写
     if (description.compare(QStringLiteral("collect stopped"), Qt::CaseInsensitive) == 0) {
         m_collectStatus = QStringLiteral("采集已停止");
         m_collectActive = false;
@@ -2611,8 +2706,9 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
                 retryCollectStartAfterStop();
                 return;
             }
-            queueCurrentDownload();//队列下载
-            requestPutBack(false);
+            appendLog(QStringLiteral("标定原始数据记录已停止，继续停止并保存真实扫描"));
+            if (!publishModelingAction(false))
+                failCurrentSlot(QStringLiteral("原始数据记录停止后无法通知设备停止真实扫描"));
         }
         return;
     }
@@ -2624,13 +2720,13 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
 void TcpController::handleDeviceStatusReport(const QByteArray &message)
 {
     quint64 rawReady = 0;
-    if (!protoVarintField(message, 4, rawReady))
+    if (!protoVarintField(message, 4, rawReady))   //rawready更新
         return;
 
     const bool ready = rawReady != 0;
     const bool changed = !m_deviceStatusReceived || ready != m_deviceInitReady;
-    m_deviceStatusReceived = true;
-    m_deviceInitReady = ready;
+    m_deviceStatusReceived = true;  
+    m_deviceInitReady = ready;    //init_ready=1
     if (changed) {
         appendLog(ready
                       ? QStringLiteral("设备初始化状态: init_ready=1，可以启动扫描")
@@ -2664,9 +2760,9 @@ void TcpController::handleDeviceStatusReport(const QByteArray &message)
         }
         if (retryModeling) {
             appendLog(QStringLiteral("设备恢复 init_ready=1，自动重试真实扫描"));
-            if (!publishModelingAction(true))
+            if (!publishModelingAction(true))           
                 failCurrentSlot(QStringLiteral("设备恢复就绪后无法重试真实扫描"));
-        } else if (!publishProjectCreate()) {
+        } else if (!publishProjectCreate()) {             //调用publishProjectCreate创建扫描工程
             failCurrentSlot(QStringLiteral("设备初始化完成后无法创建扫描工程"));
         }
     });
@@ -2766,7 +2862,7 @@ void TcpController::handleModelingResponse(const QByteArray &message)
         }
         return;
     }
-
+//预初始化中
     if (m_flowState == FlowState::Preinitializing) {
         // QoS 1 reconnects can deliver an older START/STOP response while the
         // preinitialization request is pending. Only action 9 belongs here.
@@ -2786,12 +2882,25 @@ void TcpController::handleModelingResponse(const QByteArray &message)
         const bool resumeModeling = m_resumeModelingAfterPreinit;
         m_resumeModelingAfterPreinit = false;
         appendLog(QStringLiteral("设备扫描预初始化 AC_PREINIT 成功"));
-        if (resumeModeling) {
+        if (resumeModeling) {//第一次先进入else if
             if (!publishModelingAction(true))//写入扫描任务开始/ 停止命令
                 failCurrentSlot(QStringLiteral("预初始化成功后无法重新启动真实扫描"));
-        } else if (!publishCollectAction(QStringLiteral("AC_START"))) {
-            failCurrentSlot(QStringLiteral("设备预初始化后无法开启标定原始数据记录"));
-        }//预初始化成功，发送AC_START开启标定原始数据记录
+        } else {
+            // Keep the device in its tray until Wi-Fi/MQTT/project/task/preinit
+            // have all succeeded.  The arm then moves it to P100; HOMEOK is
+            // the synchronization gate that starts modeling. Raw recording
+            // starts only after the device reports EC_ScanScanning.
+            if (!sendArmCommand(QStringLiteral("$$MT,START"))) {
+                failCurrentSlot(QStringLiteral("设备预初始化成功，但无法通知机械臂抓取设备"));
+                return;
+            }
+            m_armMotionStarted = true;
+            m_armMotionFinished = false;
+            setFlowState(FlowState::WaitingArmHome,
+                         QStringLiteral("设备预初始化完成，等待机械臂夹取并到达 P100"),
+                         kArmHomeTimeoutMs);
+            appendLog(QStringLiteral("设备 Wi-Fi、MQTT、工程、任务与预初始化检查通过；允许机械臂抓取并前往 P100"));
+        }
         return;
     }
 
@@ -2848,7 +2957,7 @@ void TcpController::handleModelingReport(const QByteArray &message)
                       .arg(status)
                       .arg(error.code, 8, 16, QLatin1Char('0')));
     }
-    //设备以此上报状态码，5进入扫描
+    
     if (m_guaranteedStopActive) {
         if (status == 7 || status == 8 || status == 9) {
             m_modelingActive = false;
@@ -2877,7 +2986,7 @@ void TcpController::handleModelingReport(const QByteArray &message)
         }
         return;
     }
-
+//设备以此上报状态码，5进入扫描 
     if (m_flowState == FlowState::StartingModeling) {
         if (status == 1)
             setProgress(QStringLiteral("设备正在进行扫描前自检"));
@@ -2890,16 +2999,15 @@ void TcpController::handleModelingReport(const QByteArray &message)
         else if (status == 5) {
             stopStepTimer();
             m_modelingActive = true;
-            appendLog(QStringLiteral("设备已进入 EC_ScanScanning，传感器已真实启动"));
+            appendLog(QStringLiteral("设备已进入 EC_ScanScanning，雷达、相机和 SLAM 已正式启动"));
             if (m_armMotionFinished) {
                 failCurrentSlot(QStringLiteral("设备真实扫描启动过晚：机械臂轨迹已结束，本次没有有效的同步扫描数据"));
-            } else if (!sendArmCommand(QStringLiteral("$$MT,SCANREADY"))) {
-                failCurrentSlot(QStringLiteral("设备真实扫描已启动，但无法通知机械臂执行标定轨迹"));
+            } else if (!m_armAtHomeReady) {
+                failCurrentSlot(QStringLiteral("设备真实扫描已启动，但机械臂不在 P100 准备状态"));
+            } else if (!publishCollectAction(QStringLiteral("AC_START"))) {
+                failCurrentSlot(QStringLiteral("设备真实扫描已启动，但无法开启标定原始数据记录"));
             } else {
-                appendLog(QStringLiteral("已通知机械臂设备扫描就绪（SCANREADY），释放 SLAM 标定轨迹"));
-                setFlowState(FlowState::Calibrating,
-                             QStringLiteral("设备正在真实扫描，机械臂开始执行 SLAM 标定轨迹"),
-                             kCalibrationTimeoutMs);
+                appendLog(QStringLiteral("真实扫描已就绪，正在等待 data_collect 返回 collecting；此时尚不放行机械臂轨迹"));
             }
         }
         return;
@@ -2912,8 +3020,8 @@ void TcpController::handleModelingReport(const QByteArray &message)
             stopStepTimer();
             m_modelingActive = false;
             appendLog(QStringLiteral("设备真实扫描已完成并保存"));
-            if (!publishCollectAction(QStringLiteral("AC_STOP")))
-                failCurrentSlot(QStringLiteral("真实扫描完成后无法停止标定数据记录"));
+            queueCurrentDownload();//保存下载信息
+            requestPutBack(false);
         }
     }
 }
@@ -2928,7 +3036,7 @@ void TcpController::startFtpDownload()
         failCurrentSlot(QStringLiteral("设备未返回采集目录"));
         return;
     }
-
+//启动独立外部curl.exe读取ftp目录
     m_curlExecutable = QStandardPaths::findExecutable(QStringLiteral("curl.exe"));
     if (m_curlExecutable.isEmpty())
         m_curlExecutable = QStandardPaths::findExecutable(QStringLiteral("curl"));
@@ -2937,7 +3045,7 @@ void TcpController::startFtpDownload()
         return;
     }
 
-    QString remotePath = QDir::fromNativeSeparators(m_collectPath);
+    QString remotePath = QDir::fromNativeSeparators(m_collectPath);//转换FTP远程路径
     const QString collectMarker = QStringLiteral("/collect/");
     const int collectPosition = remotePath.indexOf(collectMarker);
     if (collectPosition >= 0)
@@ -2947,10 +3055,10 @@ void TcpController::startFtpDownload()
     if (!remotePath.endsWith(QLatin1Char('/')))
         remotePath.append(QLatin1Char('/'));
     appendLog(QStringLiteral("FTP 路径映射: %1 -> %2").arg(m_collectPath, remotePath));
-    m_ftpUrl.setHost(m_deviceHost);
+    m_ftpUrl.setHost(m_deviceHost);//构造FTP地址
     m_ftpUrl.setPort(21);
     m_ftpUrl.setPath(remotePath);
-
+//创建电脑本地目录
     const QString directoryName = QDir::cleanPath(m_collectPath).section(QLatin1Char('/'), -1);
     m_ftpLocalDir = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation))
                         .filePath(QStringLiteral("SLAM_calibration/%1")
@@ -2969,7 +3077,7 @@ void TcpController::startFtpDownload()
     m_ftpDownloading = true;
     emit ftpDownloadingChanged();
     setFlowState(FlowState::Downloading, QStringLiteral("正在读取 FTP 数据目录"));
-
+//构造curl列目录命令
     QStringList arguments;
     arguments << QStringLiteral("--fail")
               << QStringLiteral("--show-error")
@@ -2981,8 +3089,8 @@ void TcpController::startFtpDownload()
               << QStringLiteral("%1:%2").arg(m_ftpUser, m_ftpPassword)
               << QString::fromUtf8(m_ftpUrl.toEncoded());
     appendLog(QStringLiteral("读取 FTP 目录: %1").arg(m_ftpUrl.toString()));
-    m_ftpProcess->start(m_curlExecutable, arguments);
-}
+    m_ftpProcess->start(m_curlExecutable, arguments);//启动curl.exe
+}//curl目录进程退出后QProcess::finished()信号会触发handleFtpProcessFinished()槽函数
 
 void TcpController::handleFtpProcessFinished(int exitCode, int exitStatus)
 {
@@ -3017,7 +3125,7 @@ void TcpController::handleFtpProcessFinished(int exitCode, int exitStatus)
         m_ftpPhase = 2;
         m_ftpTotalFiles = m_ftpFiles.size();
         appendLog(QStringLiteral("FTP 共 %1 个文件").arg(m_ftpTotalFiles));
-        startNextFtpFile();
+        startNextFtpFile();//解析目录后调用
         return;
     }
 
@@ -3041,7 +3149,7 @@ void TcpController::startNextFtpFile()
         return;
     }
 
-    const QString fileName = m_ftpFiles.takeFirst();
+    const QString fileName = m_ftpFiles.takeFirst();//取出第一个文件名,并且列表里去掉它
     QUrl fileUrl = m_ftpUrl;
     fileUrl.setPath(m_ftpUrl.path() + fileName);
     const QString localFile = QDir(m_ftpLocalDir).filePath(QFileInfo(fileName).fileName());
@@ -3066,7 +3174,7 @@ void TcpController::startNextFtpFile()
               << QStringLiteral("--output") << localFile
               << QString::fromUtf8(fileUrl.toEncoded());
     appendLog(QStringLiteral("下载 FTP 文件（支持断点续传）: %1").arg(fileName));
-    m_ftpProcess->start(m_curlExecutable, arguments);
+    m_ftpProcess->start(m_curlExecutable, arguments);//文件下载好后发出finish信号，调用handleFtpProcessFinished
 }
 
 void TcpController::finishFtpDownload()
@@ -3079,7 +3187,7 @@ void TcpController::finishFtpDownload()
         m_collectStatus = QStringLiteral("数据下载完成");
         emit collectStatusChanged();
         markCurrentSuccess();
-        scheduleWorkflowAction(0, [this]() { startNextDeferredDownload(); });
+        scheduleWorkflowAction(0, [this]() { startNextDeferredDownload(); });//下一个文件
         return;
     }
     requestPutBack(false);
@@ -3125,7 +3233,7 @@ void TcpController::onStepTimeout()
         failCurrentSlot(QStringLiteral("等待设备开始采集超时"));
         break;
     case FlowState::WaitingArmHome:
-        failCurrentSlot(QStringLiteral("等待机械臂夹取设备并回到 Home 静置超时"));
+        failCurrentSlot(QStringLiteral("等待机械臂夹取设备并到达 P100 超时"));
         break;
     case FlowState::Calibrating:
         failCurrentSlot(QStringLiteral("机械臂标定运行超时"));
@@ -3151,11 +3259,10 @@ void TcpController::onStepTimeout()
         setCurrentSlotState(QStringLiteral("failed"));
         setLastError(QStringLiteral("等待机械臂放回设备超时"));
         recordCurrentResult(QStringLiteral("failed"), m_lastError);
-        if (m_aborting) {
-            completeAbortedWorkflow(QStringLiteral("任务已中止，放回设备未确认"));
-        } else {
-            startNextSlot();
-        }
+        m_manualRecoveryRequired = true;
+        m_aborting = true;
+        completeAbortedWorkflow(
+            QStringLiteral("放回未确认；禁止下一槽位，请人工检查夹持状态"), false);
         break;
     default:
         break;
@@ -3223,7 +3330,8 @@ void TcpController::scheduleWorkflowAction(int delayMs, const std::function<void
 void TcpController::completeAbortedWorkflow(const QString &progress, bool notifyArm)
 {
     stopStepTimer();
-    if (notifyArm && m_connected && m_armSocket->state() == QAbstractSocket::ConnectedState)
+    if (notifyArm && !m_manualRecoveryRequired && m_connected
+        && m_armSocket->state() == QAbstractSocket::ConnectedState)
         sendArmCommand(QStringLiteral("$$MT,OVER"));
 
     const bool wasRunning = m_taskActive;

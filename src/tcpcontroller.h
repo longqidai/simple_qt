@@ -276,6 +276,7 @@ private:
     bool m_guaranteedStopActive;
     bool m_guaranteedStopAfterAbort;
     bool m_guaranteedStopNeedsPutBack;
+    bool m_manualRecoveryRequired;
     int m_guaranteedStopAttempts;
     QString m_guaranteedStopReason;
     quint64 m_workflowGeneration;

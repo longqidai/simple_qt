@@ -6,10 +6,9 @@
 #include <QString>
 #include <QStringList>
 
-// Runs the legacy two-camera OpenCV measurement outside the QML thread.
-// The USB cameras are intentionally mapped exactly like the previous host:
-// of the last two usable DirectShow cameras, the first is short-focus and
-// the second is long-focus.  Keep the two cameras in the same USB-Hub order.
+// 单远焦摄像头：后台执行垂直远点和水平远点视觉测量。
+// 近点由控制器提供工装常量；singleCameraDebug 只控制是否使用模拟数值，
+// 正式模式同样只需要一只摄像头。保留旧映射信号的近焦参数（固定为 -1）。
 class LaserVisionProcessor final : public QObject
 {
     Q_OBJECT

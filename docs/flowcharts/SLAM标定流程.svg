@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1540" height="4455" viewBox="0 0 1540 4455">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="9" refX="10" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4.5 L0,9 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title{font:700 34px "Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#172033}
+      .participant{font:600 20px "Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#26324a}
+      .label{font:500 17px "Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#172033}
+      .sub{font:400 14px Consolas,"Microsoft YaHei",sans-serif;fill:#475569}
+      .stage{font:700 19px "Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#1d4ed8}
+      .step{font:700 14px Consolas,sans-serif;fill:#2563eb}
+      .life{stroke:#c4b5fd;stroke-width:2;stroke-dasharray:7 7}
+      .arrow{stroke:#334155;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .return{stroke:#64748b;stroke-width:2;stroke-dasharray:8 6;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <text class="title" x="770" y="55" text-anchor="middle">simple_qt：SLAM 标定正常流程（当前版本）</text>
+  <rect x="-25" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="110" y="121" text-anchor="middle">操作界面 / QML</text>
+  <line class="life" x1="110" y1="143" x2="110" y2="4375"/>
+  <rect x="415" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="550" y="121" text-anchor="middle">上位机 TcpController</text>
+  <line class="life" x1="550" y1="143" x2="550" y2="4375"/>
+  <rect x="855" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="990" y="121" text-anchor="middle">机械臂 GRR20</text>
+  <line class="life" x1="990" y1="143" x2="990" y2="4375"/>
+  <rect x="1295" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="1430" y="121" text-anchor="middle">SLAM 设备</text>
+  <line class="life" x1="1430" y1="143" x2="1430" y2="4375"/>
+  <rect x="35" y="137" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="165">A. 程序启动、机械臂连接与任务建立</text>
+  <text class="step" x="36" y="228">01</text>
+  <line class="arrow" x1="110" y1="223" x2="550" y2="223"/>
+  <rect x="132" y="189" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="330" y="211" text-anchor="middle">点击“连接机械臂”</text>
+  <text class="sub" x="330" y="245" text-anchor="middle">Main.qml → toggleConnection()</text>
+  <text class="step" x="36" y="306">02</text>
+  <line class="arrow" x1="550" y1="301" x2="990" y2="301"/>
+  <rect x="572" y="267" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="289" text-anchor="middle">建立机械臂 TCP</text>
+  <text class="sub" x="770" y="323" text-anchor="middle">connectToServer() / QTcpSocket::connectToHost()</text>
+  <text class="step" x="36" y="384">03</text>
+  <line class="return" x1="990" y1="379" x2="550" y2="379"/>
+  <rect x="572" y="345" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="367" text-anchor="middle">TCP connected 信号</text>
+  <text class="step" x="36" y="462">04</text>
+  <line class="arrow" x1="550" y1="457" x2="990" y2="457"/>
+  <rect x="572" y="423" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="445" text-anchor="middle">发送握手 $$MT,CONNECT</text>
+  <text class="step" x="36" y="540">05</text>
+  <line class="return" x1="990" y1="535" x2="550" y2="535"/>
+  <rect x="572" y="501" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="523" text-anchor="middle">返回 $$MT,CONNECTOK</text>
+  <text class="sub" x="770" y="557" text-anchor="middle">handleArmCommand() 设置 armReady</text>
+  <text class="step" x="36" y="618">06</text>
+  <line class="arrow" x1="110" y1="613" x2="550" y2="613"/>
+  <rect x="132" y="579" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="330" y="601" text-anchor="middle">选择槽位并点击开始</text>
+  <text class="sub" x="330" y="635" text-anchor="middle">toggleArmTask() → beginTask()</text>
+  <text class="step" x="36" y="696">07</text>
+  <rect x="360" y="663" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="688" text-anchor="middle">建立槽位任务队列</text>
+  <text class="sub" x="550" y="711" text-anchor="middle">beginTask() → startNextSlot()</text>
+  <rect x="35" y="741" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="769">B. 单个槽位循环：扫码、网络与设备准备</text>
+  <text class="step" x="36" y="832">08</text>
+  <line class="arrow" x1="550" y1="827" x2="990" y2="827"/>
+  <rect x="572" y="793" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="815" text-anchor="middle">下发槽位 $$MT,LEFT/RIGHT,slot</text>
+  <text class="sub" x="770" y="849" text-anchor="middle">startNextSlot()</text>
+  <text class="step" x="36" y="910">09</text>
+  <line class="arrow" x1="990" y1="905" x2="990" y2="905"/>
+  <rect x="792" y="871" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="893" text-anchor="middle">机械臂移动到槽位并扫描 SN</text>
+  <text class="step" x="36" y="988">10</text>
+  <line class="return" x1="990" y1="983" x2="550" y2="983"/>
+  <rect x="572" y="949" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="971" text-anchor="middle">返回 MT,SN,...</text>
+  <text class="sub" x="770" y="1005" text-anchor="middle">processArmBuffer() → handleScannedSn()</text>
+  <text class="step" x="36" y="1066">11</text>
+  <rect x="360" y="1033" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="1058" text-anchor="middle">按 SN 搜索并切换设备 Wi-Fi</text>
+  <text class="sub" x="550" y="1081" text-anchor="middle">connectWifiByNamePart() / checkWifiConnection()</text>
+  <text class="step" x="36" y="1144">12</text>
+  <line class="arrow" x1="550" y1="1139" x2="1430" y2="1139"/>
+  <rect x="792" y="1105" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1127" text-anchor="middle">连接设备信息 TCP</text>
+  <text class="step" x="36" y="1222">13</text>
+  <line class="arrow" x1="550" y1="1217" x2="1430" y2="1217"/>
+  <rect x="792" y="1183" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1205" text-anchor="middle">请求设备信息</text>
+  <text class="sub" x="990" y="1239" text-anchor="middle">unlogall thisport + $$SI + log versionb</text>
+  <text class="step" x="36" y="1300">14</text>
+  <line class="return" x1="1430" y1="1295" x2="550" y2="1295"/>
+  <rect x="792" y="1261" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1283" text-anchor="middle">返回硬件号、SN、版本</text>
+  <text class="sub" x="990" y="1317" text-anchor="middle">processDeviceBuffer()</text>
+  <text class="step" x="36" y="1378">15</text>
+  <line class="arrow" x1="550" y1="1373" x2="1430" y2="1373"/>
+  <rect x="792" y="1339" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1361" text-anchor="middle">连接 MQTT 并订阅状态/响应主题</text>
+  <text class="sub" x="990" y="1395" text-anchor="middle">connectMqtt() → subscribeMqttTopics()</text>
+  <text class="step" x="36" y="1456">16</text>
+  <line class="return" x1="1430" y1="1451" x2="550" y2="1451"/>
+  <rect x="792" y="1417" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1439" text-anchor="middle">周期上报 init_ready=1</text>
+  <text class="sub" x="990" y="1473" text-anchor="middle">handleDeviceStatusReport()</text>
+  <rect x="35" y="1501" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="1529">C. 创建扫描工程、任务与预初始化</text>
+  <text class="step" x="36" y="1592">17</text>
+  <line class="arrow" x1="550" y1="1587" x2="1430" y2="1587"/>
+  <rect x="792" y="1553" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1575" text-anchor="middle">创建扫描工程</text>
+  <text class="sub" x="990" y="1609" text-anchor="middle">publishProjectCreate(): app_slam/request/project</text>
+  <text class="step" x="36" y="1670">18</text>
+  <line class="return" x1="1430" y1="1665" x2="550" y2="1665"/>
+  <rect x="792" y="1631" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1653" text-anchor="middle">返回工程 ID</text>
+  <text class="sub" x="990" y="1687" text-anchor="middle">slam_app/response/project</text>
+  <text class="step" x="36" y="1748">19</text>
+  <line class="arrow" x1="550" y1="1743" x2="1430" y2="1743"/>
+  <rect x="792" y="1709" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1731" text-anchor="middle">创建扫描任务</text>
+  <text class="sub" x="990" y="1765" text-anchor="middle">publishTaskCreate(): app_slam/request/task</text>
+  <text class="step" x="36" y="1826">20</text>
+  <line class="return" x1="1430" y1="1821" x2="550" y2="1821"/>
+  <rect x="792" y="1787" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1809" text-anchor="middle">返回任务 ID</text>
+  <text class="sub" x="990" y="1843" text-anchor="middle">slam_app/response/task</text>
+  <text class="step" x="36" y="1904">21</text>
+  <line class="arrow" x1="550" y1="1899" x2="1430" y2="1899"/>
+  <rect x="792" y="1865" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1887" text-anchor="middle">扫描预初始化 AC_PREINIT</text>
+  <text class="sub" x="990" y="1921" text-anchor="middle">publishModelingPreinit()</text>
+  <text class="step" x="36" y="1982">22</text>
+  <line class="return" x1="1430" y1="1977" x2="550" y2="1977"/>
+  <rect x="792" y="1943" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1965" text-anchor="middle">预初始化成功</text>
+  <text class="sub" x="990" y="1999" text-anchor="middle">handleModelingResponse()</text>
+  <rect x="35" y="2027" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="2055">D. 机械臂到 P100、真实扫描与同步标定轨迹</text>
+  <text class="step" x="36" y="2118">23</text>
+  <line class="arrow" x1="550" y1="2113" x2="990" y2="2113"/>
+  <rect x="572" y="2079" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2101" text-anchor="middle">允许抓取 $$MT,START</text>
+  <text class="sub" x="770" y="2135" text-anchor="middle">仅在 Wi-Fi/MQTT/采集目录检查通过后发送</text>
+  <text class="step" x="36" y="2196">24</text>
+  <line class="arrow" x1="990" y1="2191" x2="990" y2="2191"/>
+  <rect x="792" y="2157" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2179" text-anchor="middle">抓取设备、经 Home 到达 P100</text>
+  <text class="step" x="36" y="2274">25</text>
+  <line class="return" x1="990" y1="2269" x2="550" y2="2269"/>
+  <rect x="572" y="2235" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2257" text-anchor="middle">返回 STARTOK、HOMEOK</text>
+  <text class="step" x="36" y="2352">26</text>
+  <line class="arrow" x1="550" y1="2347" x2="1430" y2="2347"/>
+  <rect x="792" y="2313" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2335" text-anchor="middle">启动真实扫描 AC_START</text>
+  <text class="sub" x="990" y="2369" text-anchor="middle">publishModelingAction(true)</text>
+  <text class="step" x="36" y="2430">27</text>
+  <line class="return" x1="1430" y1="2425" x2="550" y2="2425"/>
+  <rect x="792" y="2391" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2413" text-anchor="middle">周期上报 status 1→2→3→4</text>
+  <text class="sub" x="990" y="2447" text-anchor="middle">等待设备自检、静止初始化、传感器与SLAM初始化</text>
+  <text class="step" x="36" y="2508">28</text>
+  <line class="return" x1="1430" y1="2503" x2="550" y2="2503"/>
+  <rect x="792" y="2469" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2491" text-anchor="middle">周期上报 status=5（真实扫描中）</text>
+  <text class="step" x="36" y="2586">29</text>
+  <line class="arrow" x1="550" y1="2581" x2="1430" y2="2581"/>
+  <rect x="792" y="2547" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2569" text-anchor="middle">开启原始数据采集 AC_START</text>
+  <text class="sub" x="990" y="2603" text-anchor="middle">publishCollectAction()</text>
+  <text class="step" x="36" y="2664">30</text>
+  <line class="return" x1="1430" y1="2659" x2="550" y2="2659"/>
+  <rect x="792" y="2625" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2647" text-anchor="middle">collecting + 采集目录 path</text>
+  <text class="sub" x="990" y="2681" text-anchor="middle">handleMqttMessage() 保存 m_collectPath</text>
+  <text class="step" x="36" y="2742">31</text>
+  <line class="arrow" x1="550" y1="2737" x2="990" y2="2737"/>
+  <rect x="572" y="2703" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2725" text-anchor="middle">释放标定轨迹 $$MT,SCANREADY</text>
+  <text class="step" x="36" y="2820">32</text>
+  <line class="arrow" x1="990" y1="2815" x2="990" y2="2815"/>
+  <rect x="792" y="2781" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2803" text-anchor="middle">执行 SLAM 标定轨迹</text>
+  <text class="step" x="36" y="2898">33</text>
+  <line class="return" x1="990" y1="2893" x2="550" y2="2893"/>
+  <rect x="572" y="2859" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2881" text-anchor="middle">返回 SCANREADYOK，轨迹结束返回 RUNFINISH</text>
+  <text class="step" x="36" y="2976">34</text>
+  <line class="arrow" x1="550" y1="2971" x2="1430" y2="2971"/>
+  <rect x="792" y="2937" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2959" text-anchor="middle">停止原始采集 AC_STOP</text>
+  <text class="sub" x="990" y="2993" text-anchor="middle">publishCollectAction()</text>
+  <text class="step" x="36" y="3054">35</text>
+  <line class="return" x1="1430" y1="3049" x2="550" y2="3049"/>
+  <rect x="792" y="3015" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3037" text-anchor="middle">collect stopped + 最终采集目录</text>
+  <text class="step" x="36" y="3132">36</text>
+  <line class="arrow" x1="550" y1="3127" x2="1430" y2="3127"/>
+  <rect x="792" y="3093" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3115" text-anchor="middle">停止真实扫描 AC_STOP</text>
+  <text class="sub" x="990" y="3149" text-anchor="middle">publishModelingAction(false)</text>
+  <text class="step" x="36" y="3210">37</text>
+  <line class="return" x1="1430" y1="3205" x2="550" y2="3205"/>
+  <rect x="792" y="3171" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3193" text-anchor="middle">status=6 保存中 → status=7 保存完成</text>
+  <rect x="35" y="3255" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="3283">E. 当前实现：加入下载队列、放回、下一槽位</text>
+  <text class="step" x="36" y="3346">38</text>
+  <rect x="360" y="3313" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3338" text-anchor="middle">保存 DeferredDownload</text>
+  <text class="sub" x="550" y="3361" text-anchor="middle">queueCurrentDownload()，槽位=waiting_download</text>
+  <text class="step" x="36" y="3424">39</text>
+  <line class="arrow" x1="550" y1="3419" x2="990" y2="3419"/>
+  <rect x="572" y="3385" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3407" text-anchor="middle">放回设备 $$MT,PUTBACK</text>
+  <text class="step" x="36" y="3502">40</text>
+  <line class="arrow" x1="990" y1="3497" x2="990" y2="3497"/>
+  <rect x="792" y="3463" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3485" text-anchor="middle">回 Home 并安全放回当前槽位</text>
+  <text class="step" x="36" y="3580">41</text>
+  <line class="return" x1="990" y1="3575" x2="550" y2="3575"/>
+  <rect x="572" y="3541" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3563" text-anchor="middle">返回 PUTBACKOK / MT,OK</text>
+  <text class="step" x="36" y="3658">42</text>
+  <rect x="360" y="3625" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3650" text-anchor="middle">尚有槽位：startNextSlot() 重复 B～E</text>
+  <rect x="35" y="3703" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="3731">F. 全部设备放回后统一 FTP 下载</text>
+  <text class="step" x="36" y="3794">43</text>
+  <line class="arrow" x1="550" y1="3789" x2="990" y2="3789"/>
+  <rect x="572" y="3755" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3777" text-anchor="middle">全部机械臂任务结束 $$MT,OVER</text>
+  <text class="sub" x="770" y="3811" text-anchor="middle">beginBatchDownloads()</text>
+  <text class="step" x="36" y="3872">44</text>
+  <rect x="360" y="3839" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3864" text-anchor="middle">逐条取 DeferredDownload 并重连对应 Wi-Fi</text>
+  <text class="sub" x="550" y="3887" text-anchor="middle">startNextDeferredDownload()</text>
+  <text class="step" x="36" y="3950">45</text>
+  <line class="arrow" x1="550" y1="3945" x2="1430" y2="3945"/>
+  <rect x="792" y="3911" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3933" text-anchor="middle">curl --list-only 读取 FTP 目录</text>
+  <text class="step" x="36" y="4028">46</text>
+  <line class="return" x1="1430" y1="4023" x2="550" y2="4023"/>
+  <rect x="792" y="3989" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4011" text-anchor="middle">返回文件列表</text>
+  <text class="step" x="36" y="4106">47</text>
+  <line class="arrow" x1="550" y1="4101" x2="1430" y2="4101"/>
+  <rect x="792" y="4067" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4089" text-anchor="middle">curl 逐文件下载，支持断点续传</text>
+  <text class="sub" x="990" y="4123" text-anchor="middle">startNextFtpFile()</text>
+  <text class="step" x="36" y="4184">48</text>
+  <line class="return" x1="1430" y1="4179" x2="550" y2="4179"/>
+  <rect x="792" y="4145" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4167" text-anchor="middle">QProcess::finished → 下一文件/下一设备</text>
+  <text class="step" x="36" y="4262">49</text>
+  <rect x="360" y="4229" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4254" text-anchor="middle">全部下载完成并记录成功</text>
+  <text class="sub" x="550" y="4277" text-anchor="middle">finishFtpDownload() → finishTask()</text>
+  <rect x="-25" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="110" y="4416" text-anchor="middle">操作界面 / QML</text>
+  <rect x="415" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="550" y="4416" text-anchor="middle">上位机 TcpController</text>
+  <rect x="855" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="990" y="4416" text-anchor="middle">机械臂 GRR20</text>
+  <rect x="1295" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="1430" y="4416" text-anchor="middle">SLAM 设备</text>
+</svg>

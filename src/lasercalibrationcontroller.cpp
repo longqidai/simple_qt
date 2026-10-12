@@ -72,7 +72,9 @@ LaserCalibrationController::LaserCalibrationController(QObject *parent)
 {
     configureSockets();
     configureTimers();
-    //视觉信号槽
+
+
+    //视觉算法信号槽
     connect(&m_vision, &LaserVisionProcessor::cameraMappingChanged,
             this, [this](int, int, const QString &description) {
         m_cameraStatus = description;
@@ -85,6 +87,8 @@ LaserCalibrationController::LaserCalibrationController(QObject *parent)
     });
     connect(&m_vision, &LaserVisionProcessor::measurementFinished,
             this, &LaserCalibrationController::handleVisionMeasurement);
+
+
     initializeDatabase();
     appendLog(QStringLiteral("激光标定后端已就绪，等待连接机械臂"));
 }
@@ -132,7 +136,7 @@ void LaserCalibrationController::setSingleCameraDebug(bool enabled)
     m_vision.setSingleCameraDebug(enabled);
     m_cameraStatus = enabled
         ? QStringLiteral("模拟测试：打开真实摄像头并执行完整流程，视觉数据使用模拟值")
-        : QStringLiteral("正式双摄像头模式：执行参考圆和激光点视觉测量");
+        : QStringLiteral("正式单远焦摄像头模式：近点固定，实测两个远点");
     appendLog(m_cameraStatus);
     emit cameraChanged();
 }
@@ -171,7 +175,7 @@ void LaserCalibrationController::configureSockets()
         m_handshakeTimer.start();
     });
     connect(&m_armSocket, &QTcpSocket::readyRead, this, [this] {
-        m_armBuffer.append(m_armSocket.readAll());
+        m_armBuffer.append(m_armSocket.readAll());//把机械臂 TCP Socket 当前已经收到的全部数据追加到接收缓冲区 m_armBuffer 后面
         processArmBuffer();
     });
     connect(&m_armSocket, &QTcpSocket::disconnected, this, [this] {
@@ -212,7 +216,25 @@ void LaserCalibrationController::configureSockets()
         });
     });
     connect(&m_receiverSocket, &QTcpSocket::readyRead, this, [this] {
-        m_receiverBuffer.append(m_receiverSocket.readAll());
+        const QByteArray received = m_receiverSocket.readAll();
+        m_receiverBuffer.append(received);
+        if (m_faceDiagnosticsActive && m_running && !received.isEmpty()) {
+            m_faceRxBytes += received.size();
+            ++m_faceRxChunks;
+            m_faceLastRx = received.right(256);
+            // TCP 一次 readyRead 可能包含半条或多条报文，不能按收包次数推断报文数。
+            // 限制日志频率和长度，避免周期上报刷满界面。
+            if (m_faceRxChunks <= 8 || m_faceRxChunks % 20 == 0) {
+                QString preview = QString::fromLatin1(received.left(256));
+                preview.replace('\r', QStringLiteral("<CR>"));
+                preview.replace('\n', QStringLiteral("<LF>"));
+                preview.replace(QChar(0), QStringLiteral("<NUL>"));
+                appendLog(QStringLiteral("[接收机原始收包] 面=%1，第%2块，本次=%3字节，累计=%4字节，缓存=%5字节；预览(最多256字节)=%6；HEX=%7")
+                              .arg(m_currentFace).arg(m_faceRxChunks).arg(received.size())
+                              .arg(m_faceRxBytes).arg(m_receiverBuffer.size()).arg(preview)
+                              .arg(QString::fromLatin1(received.left(256).toHex(' '))));
+            }
+        }
         processReceiverBuffer();
     });
     connect(&m_receiverSocket, &QTcpSocket::disconnected, this, [this] {
@@ -275,6 +297,22 @@ void LaserCalibrationController::configureTimers()
             finishAbort();
             return;
         }
+        if (m_running && m_faceDiagnosticsActive) {
+            appendLog(QStringLiteral("[面校准超时诊断] 面=%1，TCP状态=%2，待发送=%3字节，收到=%4字节/%5块，有效LASERBACK=%6，解析失败=%7，缓存剩余=%8字节")
+                          .arg(m_currentFace).arg(int(m_receiverSocket.state()))
+                          .arg(m_receiverSocket.bytesToWrite()).arg(m_faceRxBytes)
+                          .arg(m_faceRxChunks).arg(m_faceValidReports)
+                          .arg(m_faceInvalidReports).arg(m_receiverBuffer.size()));
+            appendLog(m_faceRxBytes == 0
+                          ? QStringLiteral("[面校准诊断] 本次等待期间TCP没有收到任何字节；需检查设备是否接受指令及结果上报端口，不能据此认定设备未执行。")
+                          : m_faceValidReports == 0
+                              ? QStringLiteral("[面校准诊断] TCP有数据，但未解析到有效LASERBACK；请检查原始HEX、报文格式和结束符。")
+                              : QStringLiteral("[面校准诊断] 已收到有效LASERBACK，但流程未推进；请检查面号、静置状态和错误码。"));
+            appendLog(QStringLiteral("[面校准诊断] 缓存头HEX(最多256字节)=%1；最后收包尾HEX(最多256字节)=%2")
+                          .arg(QString::fromLatin1(m_receiverBuffer.left(256).toHex(' ')))
+                          .arg(QString::fromLatin1(m_faceLastRx.toHex(' '))));
+            m_faceDiagnosticsActive = false;
+        }
         if (m_running)
             failCurrentSlot(QStringLiteral("当前步骤等待超时: %1").arg(m_progressText));
     });
@@ -305,7 +343,7 @@ void LaserCalibrationController::configureTimers()
             emit wifiConnectedChanged();
             appendLog(QStringLiteral("接收机 Wi-Fi 已就绪: %1，本机地址: %2")
                           .arg(ssid, localAddress));
-            connectReceiver();
+            connectReceiver(); //连接设备
             return;
         }
         ++m_wifiAttempts;
@@ -516,6 +554,11 @@ void LaserCalibrationController::clearLog()
 
 void LaserCalibrationController::setState(State state, const QString &progress, int timeoutMs)
 {
+    // 面校准统计只属于当前面的等待阶段，不能串入后续运动/视觉超时。
+    if (state != State::WaitingFace1 && state != State::WaitingFace2
+        && state != State::WaitingFace3 && state != State::WaitingFace4
+        && state != State::WaitingFace5 && state != State::WaitingFace6)
+        m_faceDiagnosticsActive = false;
     m_state = state;
     setProgress(progress);
     m_stepTimer.stop();
@@ -573,8 +616,13 @@ bool LaserCalibrationController::sendReceiver(const QByteArray &command)
                       .arg(QString::fromLatin1(command).trimmed()));
         return false;
     }
-    if (m_receiverSocket.write(command) < 0)
+    const qint64 accepted = m_receiverSocket.write(command);
+    if (accepted != command.size()) {
+        appendLog(QStringLiteral("[接收机发送失败] 写入=%1/%2字节，错误=%3，指令=%4")
+                      .arg(accepted).arg(command.size()).arg(m_receiverSocket.errorString())
+                      .arg(QString::fromLatin1(command).trimmed()));
         return false;
+    }
     m_receiverSocket.flush();
     appendLog(QStringLiteral("发送接收机: %1")
                   .arg(QString::fromLatin1(command).trimmed()));
@@ -585,7 +633,7 @@ void LaserCalibrationController::processArmBuffer()
 {
     if (m_state == State::WaitingSn) {
         const QString pending = QString::fromUtf8(m_armBuffer).trimmed();
-        static const QRegularExpression snPattern(
+        static const QRegularExpression snPattern(//匹配成统一SN号
             QStringLiteral("(?:SNFF)?([A-Za-z][A-Za-z0-9_-]{6,})"));
         const QRegularExpressionMatch match = snPattern.match(pending);
         if (match.hasMatch() && !pending.contains(QStringLiteral("MT,"))) {
@@ -676,7 +724,7 @@ void LaserCalibrationController::handleArmOk()
         appendLog(QStringLiteral("机械臂已到达垂直远点，重新开启激光测距并等待稳定"));
         QTimer::singleShot(800, this, [this] {
             if (m_running && m_state == State::WaitingPoint3)
-                startVisionMeasurement(VisionTarget::VerticalFar);
+                startVisionMeasurement(VisionTarget::VerticalFar);//开启测量
         });
         break;
     case State::WaitingPoint4:
@@ -708,7 +756,7 @@ void LaserCalibrationController::handleScannedSn(const QString &sn)
 {
     if (m_state != State::WaitingSn)
         return;
-    const QString cleanSn = normalizeSn(sn);
+    const QString cleanSn = normalizeSn(sn); //处理sn号，删掉不需要的字符
     if (cleanSn.isEmpty()) {
         failCurrentSlot(QStringLiteral("机械臂扫码结果无效: %1").arg(sn));
         return;
@@ -728,27 +776,26 @@ void LaserCalibrationController::handleScannedSn(const QString &sn)
 
 void LaserCalibrationController::processReceiverBuffer()
 {
-    //二进制报文处理
-    const QByteArray snHeader("\xaa\x44\x12\x1c\x25", 5);
-    const QByteArray rangeHeader("\xaa\x44\x12\x1c\x89\x13", 6);
+    const QByteArray snHeader("\xaa\x44\x12\x1c\x25", 5);//SN二进制报文头
+    const QByteArray rangeHeader("\xaa\x44\x12\x1c\x89\x13", 6);//激光测距二进制报文头
 
     bool changed = false;
     bool extracted = true;
     while (extracted) {
         extracted = false;
         int start = m_receiverBuffer.indexOf(rangeHeader);
-        if (start >= 0 && m_receiverBuffer.size() >= start + 40) {
+        if (start >= 0 && m_receiverBuffer.size() >= start + 40) {//每个测距报文固定40字节
             const QByteArray frame = m_receiverBuffer.mid(start, 40);
             m_receiverBuffer.remove(start, 40);
-            processLaserRangeFrame(frame);//解析激光测距报文
+            processLaserRangeFrame(frame);      //解析激光测距报文
             extracted = true;
             continue;
         }
         start = m_receiverBuffer.indexOf(snHeader);
-        if (start >= 0 && m_receiverBuffer.size() >= start + 144) {//解析SN报文
+        if (start >= 0 && m_receiverBuffer.size() >= start + 144) {   //解析SN报文，如果找到，并且已经收齐144字节说明完整
             const QByteArray frame = m_receiverBuffer.mid(start, 144);
             m_receiverBuffer.remove(start, 144);
-            const QString sn = QString::fromLatin1(frame.mid(52, 9)).trimmed();
+            const QString sn = QString::fromLatin1(frame.mid(52, 9)).trimmed();//SN号位于报文第52字节开始的位置，长度9字节
             if (!sn.isEmpty() && sn != m_currentSn) {
                 m_currentSn = sn;
                 changed = true;
@@ -759,10 +806,10 @@ void LaserCalibrationController::processReceiverBuffer()
             extracted = true;
             continue;
         }
-        start = m_receiverBuffer.indexOf("$$SI");//$$SI 硬件号报文
+        start = m_receiverBuffer.indexOf("$$SI");   //$$SI 硬件号报文
         if (start >= 0 && m_receiverBuffer.size() >= start + 62) {
             const QByteArray frame = m_receiverBuffer.mid(start, 62);
-            m_receiverBuffer.remove(start, 62);
+            m_receiverBuffer.remove(start, 62);//拿出这条报文，并且删掉
             quint8 crc = 0;
             for (int i = 0; i < 61; ++i)
                 crc ^= static_cast<quint8>(frame.at(i));
@@ -785,9 +832,14 @@ void LaserCalibrationController::processReceiverBuffer()
     const int pendingRange = m_receiverBuffer.indexOf(rangeHeader);
     const int pendingSn = m_receiverBuffer.indexOf(snHeader);
     const int pendingSi = m_receiverBuffer.indexOf("$$SI");
-    if ((pendingRange >= 0 && m_receiverBuffer.size() < pendingRange + 40)
+    if ((pendingRange >= 0 && m_receiverBuffer.size() < pendingRange + 40)//报文不完整直接返回
         || (pendingSn >= 0 && m_receiverBuffer.size() < pendingSn + 144)
         || (pendingSi >= 0 && m_receiverBuffer.size() < pendingSi + 62)) {
+        if (m_faceDiagnosticsActive && !m_faceBufferWaitLogged) {
+            m_faceBufferWaitLogged = true;
+            appendLog(QStringLiteral("[接收机拆帧等待] 缓存=%1字节，测距头位置=%2(需40字节)，SN头位置=%3(需144字节)，SI头位置=%4(需62字节)；暂缓文本解析")
+                          .arg(m_receiverBuffer.size()).arg(pendingRange).arg(pendingSn).arg(pendingSi));
+        }
         if (changed)
             emit deviceInfoChanged();
         tryFinishReceiverInfo();
@@ -795,18 +847,24 @@ void LaserCalibrationController::processReceiverBuffer()
     }
 
     int newline = -1;
-    while ((newline = m_receiverBuffer.indexOf('\n')) >= 0) {
+    if (m_faceDiagnosticsActive && !m_faceBufferWaitLogged
+        && !m_receiverBuffer.isEmpty() && !m_receiverBuffer.contains('\n')) {
+        m_faceBufferWaitLogged = true;
+        appendLog(QStringLiteral("[接收机拆帧等待] 缓存有%1字节，但尚无LF换行结束符，等待后续数据")
+                      .arg(m_receiverBuffer.size()));
+    }
+    while ((newline = m_receiverBuffer.indexOf('\n')) >= 0) {//取出一条完整报文
         QByteArray data = m_receiverBuffer.left(newline);
         m_receiverBuffer.remove(0, newline + 1);
         data.replace('\0', ' ');
         const QString line = QString::fromUtf8(data).trimmed();
         if (!line.isEmpty())
-            processReceiverLine(line);//检查文本中的关键字段，把解析结果保存
+            processReceiverLine(line);    //laser planer检查文本中的关键字段，把解析结果保存
     }
-    while (!m_receiverBuffer.isEmpty() && m_receiverBuffer.at(0) == '\0')
+    while (!m_receiverBuffer.isEmpty() && m_receiverBuffer.at(0) == '\0')//删除残留空字节
         m_receiverBuffer.remove(0, 1);
 
-    if (changed)
+    if (changed) //更新设备信息
         emit deviceInfoChanged();
     tryFinishReceiverInfo();
 }
@@ -818,8 +876,10 @@ void LaserCalibrationController::processReceiverLine(const QString &line)
     const int laserBackStart = line.indexOf(QStringLiteral("$LASERBACK"), 0,
                                              Qt::CaseInsensitive);
     if (laserBackStart >= 0) {
-        const LaserBack report = parseLaserBack(line.mid(laserBackStart));
+        const LaserBack report = parseLaserBack(line.mid(laserBackStart));//处理报文
         if (report.valid) {
+            if (m_faceDiagnosticsActive)
+                ++m_faceValidReports;
             appendLog(QStringLiteral(
                 "$LASERBACK 解析成功：面=%1，静置状态=%2，全部完成=%3，错误码=%4，当前流程状态=%5")
                           .arg(report.panelId)
@@ -827,8 +887,10 @@ void LaserCalibrationController::processReceiverLine(const QString &line)
                           .arg(report.sideState)
                           .arg(report.errorCode)
                           .arg(static_cast<int>(m_state)));
-            handleLaserBack(report);
+            handleLaserBack(report);  //保存pitch/yaw/bias
         } else {
+            if (m_faceDiagnosticsActive)
+                ++m_faceInvalidReports;
             appendLog(QStringLiteral("无法解析 $LASERBACK 报文"));
         }
         return;
@@ -866,10 +928,10 @@ void LaserCalibrationController::processLaserRangeFrame(const QByteArray &frame)
     if (frame.size() < 32)
         return;
     float metres = 0.0f;
-    std::memcpy(&metres, frame.constData() + 28, sizeof(float));
+    std::memcpy(&metres, frame.constData() + 28, sizeof(float));//从偏移28的位置读取一个 float
     if (!std::isfinite(metres) || metres < 0.0f)
         return;
-    m_laserDistance = static_cast<double>(metres) * 1000.0;
+    m_laserDistance = static_cast<double>(metres) * 1000.0;//得到激光距离
     emit measurementChanged();
 }
 
@@ -889,32 +951,32 @@ LaserCalibrationController::parseLaserBack(const QString &line) const
     }
 
     bool ok = false;
-    result.restBits = fields.at(2).toInt(&ok);
+    result.restBits = fields.at(2).toInt(&ok);//读取第三个字段表示六个面的累计静置状态位
     if (!ok) return result;
-    result.restState = fields.at(3).toInt(&ok);
+    result.restState = fields.at(3).toInt(&ok);//解析当前面的静置状态
     if (!ok) return result;
-    result.sideState = fields.at(4).toInt(&ok);
+    result.sideState = fields.at(4).toInt(&ok);//解析整个六面标定是否完成
     if (!ok) return result;
-    result.panelId = fields.at(5).toInt(&ok);
+    result.panelId = fields.at(5).toInt(&ok);//解析当前面编号，正常应该为 1～6
     if (!ok) return result;
     // 完整实机协议包含六个面的36项参数（共51个字段）；SSCOM测试允许
     // 只发送前6个状态字段，或者发送旧版21字段简化报文。
     if (fields.size() >= 51) {
-        for (int i = 6; i <= 11; ++i) {
+        for (int i = 6; i <= 11; ++i) {      //共6个当前面参数
             result.faceParameters.append(fields.at(i).toDouble(&ok));
             if (!ok) return LaserBack();
         }
-        for (int i = 42; i <= 47; ++i) {
+        for (int i = 42; i <= 47; ++i) {           //6个六面完成后的综合偏差参数bias
             result.bias.append(fields.at(i).toDouble(&ok));
             if (!ok) return LaserBack();
         }
-        result.pitch = fields.at(48).toDouble(&ok);
+        result.pitch = fields.at(48).toDouble(&ok);  //读取激光俯仰角偏差
         if (!ok) return LaserBack();
-        result.yaw = fields.at(49).toDouble(&ok);
+        result.yaw = fields.at(49).toDouble(&ok);  //读取激光水平角偏差
         if (!ok) return LaserBack();
-        result.errorCode = fields.at(50).toInt(&ok);
+        result.errorCode = fields.at(50).toInt(&ok);  //读取设备返回的错误码
         if (!ok) return LaserBack();
-    } else if (fields.size() >= 21) {
+    } else if (fields.size() >= 21) {   //旧版报文
         for (int i = 6; i <= 11; ++i) {
             result.faceParameters.append(fields.at(i).toDouble(&ok));
             if (!ok) return LaserBack();
@@ -944,19 +1006,19 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
     // $LASERBACK 的 restBits 是六个面的累计完成掩码。部分 SSCOM
     // 简化报文会在每一面都固定填写 1，因此还要根据“当前面已静置完成”
     // 补上对应位，并与本槽位已经完成的位合并，保证状态只增不减。
-    int restBits = report.restBits & 0x3f;
+    int restBits = report.restBits & 0x3f;           //去掉最高两位
     // 部分固件最后一个字段上报的是机械臂点位（1~7），而不是面号；
     // 点位7仍对应面6。因此超出1~6时使用状态机当前正在校准的面。
     const int completedFace = (report.panelId >= 1 && report.panelId <= 6)
         ? report.panelId : m_currentFace;
     if (report.restState == 2
         && completedFace >= 1 && completedFace <= 6) {
-        restBits |= (1 << (completedFace - 1));
+        restBits |= (1 << (completedFace - 1));  //把当前面的 bit 设置成1
     }
     restBits |= m_faceRestBits;
     if (m_faceRestBits != restBits) {
         m_faceRestBits = restBits;
-        emit faceRestBitsChanged();
+        emit faceRestBitsChanged();   //状态确实发生变化时更新界面
         appendLog(QStringLiteral("面静置状态已更新：%1")
                       .arg(m_faceRestBits, 6, 2, QLatin1Char('0')));
     }
@@ -966,7 +1028,7 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         m_currentFace = report.panelId;
         emit faceChanged();
     }
-    if (report.errorCode != 0) {
+    if (report.errorCode != 0) {   //错误码不为0：有错误
         const QString detail = report.errorCode == 1
             ? QStringLiteral("激光外参校准失败，需要复位整个流程")
             : report.errorCode == 2
@@ -976,7 +1038,7 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         return;
     }
 
-    if (m_state == State::WaitingAngle) {
+    if (m_state == State::WaitingAngle) {   //全部测量完成
         if (report.sideState != 1)
             return;
         m_stepTimer.stop();
@@ -988,10 +1050,10 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
                       .arg(m_finalYaw, 0, 'f', 6));
         // NEXT1 负责夹取，NEXT2～NEXT7 对应后续姿态。角度校准完成后
         // 不再增加额外标定点编号，直接通知机械臂执行“回 Home + 安全放回”。
-        ensureReceiverSafe();
+        ensureReceiverSafe(); //关闭激光
         m_pendingSuccess = true;
         m_pendingReason.clear();
-        sendArm("$$MT,SUCCESS\r\n");
+        sendArm("$$MT,SUCCESS\r\n");//通知机械臂放回设备
         setState(State::WaitingPutback,
                  QStringLiteral("标定成功，等待机械臂安全放回设备"),
                  kArmMoveTimeoutMs);
@@ -1006,14 +1068,14 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         moveToPoint(2);
         break;
     case State::WaitingFace2:
+        // 单摄像头方案：固定近点，直接移动到垂直远点。
+        m_verticalNear = 520.0;
+        m_horizontalNear = m_horizontalLineHeight;
+        emit measurementChanged();
+        appendLog(QStringLiteral("近点固定：水平=%1 mm，垂直=520 mm；跳过近焦测量").arg(m_horizontalNear));
         sendReceiver("set laser on\r\n");
-        sendReceiver("log laserrangingb ontime 1\r\n");
-        sendReceiver("set laser survey auto\r\n");
-        appendLog(QStringLiteral("激光与自动测距已开启，等待稳定后使用近焦摄像头测量垂直近点"));
-        QTimer::singleShot(800, this, [this] {
-            if (m_running && m_state == State::WaitingFace2)
-                startVisionMeasurement(VisionTarget::VerticalNear);
-        });
+        sendReceiver("log laserrangingb ontime 0\r\n");
+        moveToPoint(3);
         break;
     case State::WaitingFace3:
         moveToPoint(5);
@@ -1027,12 +1089,12 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
     case State::WaitingFace6:
         // 六面校准完成后，按旧版顺序重新开启激光和测距，再测水平远点。
         sendReceiver("set laser on\r\n");
-        sendReceiver("log laserrangingb ontime 1\r\n");
+        sendReceiver("log laserrangingb ontime 1\r\n");//重新开启报文
         sendReceiver("set laser survey auto\r\n");
         appendLog(QStringLiteral("六面校准完成，等待测距稳定后测量水平远点"));
         QTimer::singleShot(800, this, [this] {
             if (m_running && m_state == State::WaitingFace6)
-                startVisionMeasurement(VisionTarget::HorizontalFar);
+                startVisionMeasurement(VisionTarget::HorizontalFar);//开启测量
         });
         break;
     default:
@@ -1055,7 +1117,7 @@ bool LaserCalibrationController::validateMeasurements(const QVariantMap &measure
 
 void LaserCalibrationController::beginNextSlot()
 {
-    continueIfNotPaused([this] {//是否暂停
+    continueIfNotPaused([this] {    //是否暂停
         ++m_currentIndex;
         if (m_currentIndex >= m_slots.size()) {
             finishBatch();
@@ -1108,7 +1170,7 @@ void LaserCalibrationController::beginCurrentSlot()
         QTimer::singleShot(120, this, [this] {
             if (!m_running)
                 return;
-            sendArm("$$MT,NEXT\r\n");  //扫码
+            sendArm("$$MT,NEXT\r\n");  //扫码返回sn号
             setState(State::WaitingSn,
                      QStringLiteral("等待机械臂扫描 %1托盘 %2 号位")
                          .arg(m_slots.at(m_currentIndex).tray == QStringLiteral("left")
@@ -1139,9 +1201,9 @@ void LaserCalibrationController::requestReceiverInfo()
 
     // $$SI 查询硬件号；文档规定 log versionb 查询 SN/版本报文。
     // 首次清理当前 TCP 端口的旧日志订阅，后续只补查尚未收到的字段。
-    if (m_receiverAttempts == 0) {
-        sendReceiver("unlogall thisport\r\n$$SI\r\n");
-        sendReceiver("log versionb\r\n");
+    if (m_receiverAttempts == 0) {// 第一次查询
+        sendReceiver("unlogall thisport\r\n$$SI\r\n");//关闭当前TCP端口之前残留的所有周期报文订阅//查询硬件号
+        sendReceiver("log versionb\r\n");//返回一个144字节二进制报文
     } else {
         if (m_currentHardware.isEmpty())
             sendReceiver("$$SI\r\n");
@@ -1179,11 +1241,11 @@ void LaserCalibrationController::tryFinishReceiverInfo()
 void LaserCalibrationController::startPoint1()
 {
     // 旧版在设备信息读取完成后才开启激光标定结果上报。
-    if (!sendReceiver("log laserback ontime 1\r\n")) {
+    if (!sendReceiver("log laserback ontime 1\r\n")) {//订阅 $LASERBACK激光标定结果报文
         failCurrentSlot(QStringLiteral("开启接收机激光标定结果上报失败"));
         return;
     }
-    if (!sendReceiver("set laser reset calibration\r\n")) {
+    if (!sendReceiver("set laser reset calibration\r\n")) {//清除上一次激光外参标定状态
         failCurrentSlot(QStringLiteral("发送接收机标定复位指令失败"));
         return;
     }
@@ -1195,13 +1257,20 @@ void LaserCalibrationController::startPoint1()
 
 void LaserCalibrationController::requestPlanarCalibration(int face)
 {
+    m_faceDiagnosticsActive = true;
+    m_faceRxBytes = 0;
+    m_faceRxChunks = 0;
+    m_faceValidReports = 0;
+    m_faceInvalidReports = 0;
+    m_faceBufferWaitLogged = false;
+    m_faceLastRx.clear();
     m_currentFace = face;
     emit faceChanged();
-    if (!sendReceiver("set laser planar calibration\r\n")) {
+    if (!sendReceiver("set laser planar calibration\r\n")) {//面校准，接收机返回LASERBACK结果报文
         failCurrentSlot(QStringLiteral("发送面校准指令失败"));
         return;
     }
-    appendLog(QStringLiteral("[面校准] 面 %1 指令发送成功，开始等待 $LASERBACK 结果")
+    appendLog(QStringLiteral("[面校准] 面 %1 指令已写入TCP（不代表设备确认执行），开始等待 $LASERBACK 结果")
                   .arg(face));
     // WaitingFace2 后面紧接 WaitingPoint3，枚举并非完全等距，显式映射。
     State target = State::WaitingFace1;
@@ -1212,6 +1281,18 @@ void LaserCalibrationController::requestPlanarCalibration(int face)
     else if (face == 6) target = State::WaitingFace6;
     setState(target, QStringLiteral("等待接收机完成面 %1 校准").arg(face),
              kFaceTimeoutMs);
+    // 仅做诊断，不自动重发面校准指令，避免设备重复执行校准。
+    QTimer::singleShot(5000, this, [this, target, face] {
+        if (!m_running || !m_faceDiagnosticsActive || m_state != target
+            || m_currentFace != face)
+            return;
+        appendLog(QStringLiteral("[面校准等待5秒] 面=%1，收到=%2字节/%3块，有效LASERBACK=%4，解析失败=%5，缓存=%6字节，待发送=%7字节")
+                      .arg(face).arg(m_faceRxBytes).arg(m_faceRxChunks)
+                      .arg(m_faceValidReports).arg(m_faceInvalidReports)
+                      .arg(m_receiverBuffer.size()).arg(m_receiverSocket.bytesToWrite()));
+        if (m_faceRxBytes == 0)
+            appendLog(QStringLiteral("[面校准诊断] 指令发出后尚未收到TCP数据；写入成功不代表接收机已确认执行。"));
+    });
 }
 
 void LaserCalibrationController::moveToPoint(int point)
@@ -1237,7 +1318,11 @@ void LaserCalibrationController::startVisionMeasurement(VisionTarget target)
 {
     if (!m_running)
         return;
-    const bool shortFocus = target == VisionTarget::VerticalNear;
+    if (target == VisionTarget::VerticalNear) {
+        failCurrentSlot(QStringLiteral("单摄像头方案不再执行近点视觉测量"));
+        return;
+    }
+    const bool shortFocus = false;
     m_visionTarget = target;
     QString name;
     State state = State::MeasuringVerticalNear;
@@ -1259,7 +1344,7 @@ void LaserCalibrationController::startVisionMeasurement(VisionTarget target)
                          .arg(shortFocus ? QStringLiteral("近焦")
                                          : QStringLiteral("远焦"),
                               name);
-    emit cameraChanged();
+    emit cameraChanged();//更新摄像头区域说明
     setState(state, QStringLiteral("正在进行%1视觉测量").arg(name),
              kVisionTimeoutMs);
     appendLog(QStringLiteral("启动%1视觉测量，沿用旧版 1920×1080 摄像头与参考物参数")
@@ -1277,7 +1362,7 @@ void LaserCalibrationController::handleVisionMeasurement(
 {
     if (!imageDataUrl.isEmpty())
         m_cameraImageUrl = imageDataUrl;
-    emit cameraChanged();
+    emit cameraChanged();//更新摄像头画面
     if (!m_running || m_visionTarget == VisionTarget::None)
         return;
 
@@ -1308,7 +1393,7 @@ void LaserCalibrationController::handleVisionMeasurement(
         else
             m_laserDistance = 900.0;
     }
-    if (!std::isfinite(m_laserDistance) || m_laserDistance <= 0.0) {
+    if (!std::isfinite(m_laserDistance) || m_laserDistance <= 0.0) {   //检查接收机激光距离
         appendLog(QStringLiteral(
             "[视觉/测距校验] 图像算法已成功，但激光测距值无效：%1")
                       .arg(m_laserDistance, 0, 'f', 3));
@@ -1318,11 +1403,11 @@ void LaserCalibrationController::handleVisionMeasurement(
         return;
     }
 
-    QString name;
+    QString name;//根据测量目标保存结果
     if (completedTarget == VisionTarget::VerticalNear) {
         name = QStringLiteral("垂直近点");
-        m_verticalCloseRawHeight = height;
-        m_verticalCloseRange = m_laserDistance;
+        m_verticalCloseRawHeight = height;     //来自摄像头算法
+        m_verticalCloseRange = m_laserDistance;  //来自接收机激光测距报文
     } else if (completedTarget == VisionTarget::VerticalFar) {
         name = QStringLiteral("垂直远点");
         m_verticalFarRawHeight = height;
@@ -1345,7 +1430,7 @@ void LaserCalibrationController::handleVisionMeasurement(
     if (completedTarget == VisionTarget::VerticalNear) {
         // 移动到远点前先停止连续测距，避免机械臂运动中的距离污染远点结果。
         sendReceiver("log laserrangingb ontime 0\r\n");
-        moveToPoint(3);
+        moveToPoint(3);        
     } else if (completedTarget == VisionTarget::VerticalFar) {
         // 远点数据已锁定，后续面校准期间不需要连续测距。
         sendReceiver("log laserrangingb ontime 0\r\n");
@@ -1362,54 +1447,24 @@ void LaserCalibrationController::handleVisionMeasurement(
         // 旧版在发送六参数角度标定前关闭激光与连续测距。
         sendReceiver("set laser off\r\n");
         sendReceiver("log laserrangingb ontime 0\r\n");
-        startAngleCalibration();
+        startAngleCalibration();//发送 set laser angle calibration 六个参数
     }
 }
 
 bool LaserCalibrationController::calculateAngleInputs(QString *reason)
 {
-    const double rangeDifference = std::abs(m_verticalFarRange
-                                             - m_verticalCloseRange);
-    appendLog(QStringLiteral(
-        "[角度算法] 原始输入：垂直近点(视觉=%1,测距=%2)，垂直远点(视觉=%3,测距=%4)，水平远点(视觉=%5,测距=%6)，水平线高=%7")
-                  .arg(m_verticalCloseRawHeight, 0, 'f', 3)
-                  .arg(m_verticalCloseRange, 0, 'f', 3)
-                  .arg(m_verticalFarRawHeight, 0, 'f', 3)
-                  .arg(m_verticalFarRange, 0, 'f', 3)
-                  .arg(m_horizontalFarRawHeight, 0, 'f', 3)
-                  .arg(m_horizontalFarRange, 0, 'f', 3)
-                  .arg(m_horizontalLineHeight, 0, 'f', 3));
-    if (m_verticalCloseRawHeight <= 0.0 || m_verticalFarRawHeight <= 0.0
-        || m_horizontalFarRawHeight <= 0.0 || m_verticalCloseRange <= 0.0
-        || m_verticalFarRange <= 0.0 || m_horizontalFarRange <= 0.0) {
+    // GRR20 固定近点；只需两次远点实测。视觉高度允许负数，测距必须为正。
+    if (!std::isfinite(m_verticalFarRawHeight) || !std::isfinite(m_horizontalFarRawHeight)
+        || !std::isfinite(m_verticalFarRange) || m_verticalFarRange <= 0.0
+        || !std::isfinite(m_horizontalFarRange) || m_horizontalFarRange <= 0.0) {
         if (reason)
-            *reason = QStringLiteral("视觉或激光测距参数不完整，不能执行角度校准");
+            *reason = QStringLiteral("远点视觉或激光测距参数无效，不能执行角度校准");
         return false;
     }
-    if (rangeDifference < 1.0) {
-        if (reason)
-            *reason = QStringLiteral("垂直近、远点激光距离过于接近，无法计算近点高度");
-        return false;
-    }
-
-    // 完全沿用旧版 GRR20 计算：水平近点使用设备类型对应的投线高度；
-    // 垂直近点由近、远两次视觉高度和激光距离外推，反向场景保留 -7 mm 补偿。
-    const double sinB = std::abs(m_verticalCloseRange) / rangeDifference;
-    const double heightDifference = std::abs(m_verticalFarRawHeight
-                                               - m_verticalCloseRawHeight);
-    appendLog(QStringLiteral(
-        "[角度算法] 中间量计算成功：距离差=%1，高度差=%2，sinB=%3")
-                  .arg(rangeDifference, 0, 'f', 3)
-                  .arg(heightDifference, 0, 'f', 3)
-                  .arg(sinB, 0, 'f', 6));
     m_horizontalNear = m_horizontalLineHeight;
+    m_verticalNear = 520.0;
     m_horizontalFar = m_horizontalFarRawHeight;
     m_horizontalLength = m_horizontalFarRange;
-    if (m_verticalFarRawHeight > m_verticalCloseRawHeight) {
-        m_verticalNear = m_verticalCloseRawHeight - heightDifference * sinB;
-    } else {
-        m_verticalNear = m_verticalCloseRawHeight + heightDifference * sinB - 7.0;
-    }
     m_verticalFar = m_verticalFarRawHeight;
     m_verticalLength = m_verticalFarRange;
     const double values[] = {m_horizontalNear, m_horizontalFar,
@@ -1421,8 +1476,8 @@ bool LaserCalibrationController::calculateAngleInputs(QString *reason)
                 *reason = QStringLiteral("角度校准计算结果包含无效数字");
             return false;
         }
-    }
-    emit measurementChanged(); //得到最终六个参数
+    }                           //              固定620   2远焦高度  激光测距  固定520mm  1远焦高度 激光测距
+    emit measurementChanged(); //得到最终六个参数水平近点、水平远点、水平激光长度,垂直近点、垂直远点、垂直激光长度
     appendLog(QStringLiteral(
         "角度校准输入完成：水平[%1,%2,%3]，垂直[%4,%5,%6]")
                   .arg(m_horizontalNear, 0, 'f', 3)
@@ -1444,7 +1499,7 @@ void LaserCalibrationController::startAngleCalibration()
         .arg(m_verticalNear, 0, 'g', 15)
         .arg(m_verticalFar, 0, 'g', 15)
         .arg(m_verticalLength, 0, 'g', 15);
-    if (!sendReceiver(command.toUtf8())) {  //发送完整laser参数
+    if (!sendReceiver(command.toUtf8())) {  //发送完整laser参数,接收机返回LASERBACK
         failCurrentSlot(QStringLiteral("发送激光角度校准指令失败"));
         return;
     }
@@ -1664,7 +1719,7 @@ void LaserCalibrationController::addResult(bool success, const QString &reason)
         bias.append(value);
     row.insert(QStringLiteral("bias"), bias);
     m_results.append(row);
-    saveResultToDatabase(row); //保存数据
+    saveResultToDatabase(row); //保存数据库数据
     emit resultsChanged();
 }
 
