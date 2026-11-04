@@ -3000,11 +3000,11 @@ void TcpController::handleModelingReport(const QByteArray &message)
             stopStepTimer();
             m_modelingActive = true;
             appendLog(QStringLiteral("设备已进入 EC_ScanScanning，雷达、相机和 SLAM 已正式启动"));
-            if (m_armMotionFinished) {
+            if (m_armMotionFinished) {//机械臂轨迹是否已经意外结束
                 failCurrentSlot(QStringLiteral("设备真实扫描启动过晚：机械臂轨迹已结束，本次没有有效的同步扫描数据"));
-            } else if (!m_armAtHomeReady) {
+            } else if (!m_armAtHomeReady) {//机械臂是否确实处于P100准备状态
                 failCurrentSlot(QStringLiteral("设备真实扫描已启动，但机械臂不在 P100 准备状态"));
-            } else if (!publishCollectAction(QStringLiteral("AC_START"))) {
+            } else if (!publishCollectAction(QStringLiteral("AC_START"))) {//发送采集开始指令
                 failCurrentSlot(QStringLiteral("设备真实扫描已启动，但无法开启标定原始数据记录"));
             } else {
                 appendLog(QStringLiteral("真实扫描已就绪，正在等待 data_collect 返回 collecting；此时尚不放行机械臂轨迹"));
@@ -3058,17 +3058,26 @@ void TcpController::startFtpDownload()
     m_ftpUrl.setHost(m_deviceHost);//构造FTP地址
     m_ftpUrl.setPort(21);
     m_ftpUrl.setPath(remotePath);
-//创建电脑本地目录
-    const QString directoryName = QDir::cleanPath(m_collectPath).section(QLatin1Char('/'), -1);
-    m_ftpLocalDir = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation))
-                        .filePath(QStringLiteral("SLAM_calibration/%1")
-                                      .arg(directoryName.isEmpty()
-                                               ? QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss"))
-                                               : directoryName));
+// 创建文档约定的本地目录：E:\slam_data\<设备SN>\。
+// FTP 文件仍使用设备返回的原文件名，因此 META 最终路径为
+// E:\slam_data\<设备SN>\<文件名>.meta，供 SLAM_META_Tool 直接扫描。
+    QString storageSn = m_currentSn.trimmed();
+    if (!storageSn.startsWith(QStringLiteral("SN"), Qt::CaseInsensitive)
+        && storageSn.startsWith(QLatin1Char('L'), Qt::CaseInsensitive)) {
+        storageSn.prepend(QStringLiteral("SN"));
+    }
+    storageSn.replace(QRegularExpression(QStringLiteral("[<>:\"/\\\\|?*]")),
+                      QStringLiteral("_"));
+    if (storageSn.isEmpty()) {
+        failCurrentSlot(QStringLiteral("设备 SN 为空，无法创建 META 下载目录"));
+        return;
+    }
+    m_ftpLocalDir = QDir(QStringLiteral("E:/slam_data")).filePath(storageSn);
     if (!QDir().mkpath(m_ftpLocalDir)) {
         failCurrentSlot(QStringLiteral("无法创建下载目录: %1").arg(m_ftpLocalDir));
         return;
     }
+    appendLog(QStringLiteral("SLAM 数据本地目录: %1").arg(m_ftpLocalDir));
 
     m_ftpFiles.clear();
     m_ftpPhase = 1;

@@ -18,12 +18,15 @@ namespace {
 
 constexpr int kFrameWidth = 1920;
 constexpr int kFrameHeight = 1080;
+// 视觉测量只使用画面中央区域。左右各裁掉 10%，去除边缘墙面、支架等
+// 与测量无关的内容；不缩放 ROI，避免插值改变像素距离和轮廓形状。
+constexpr double kHorizontalCropRatio = 0.10;
 // 两套镜头画面中的红色参考圆分别代表下面两段已知实际长度。
-constexpr double kShortReferenceLengthMm = 566.0;
+constexpr double kShortReferenceLengthMm = 570.0;
 constexpr double kLongReferenceLengthMm = 1060.0;
 // 一次测量收集 4 个稳定单帧结果，最多查看 120 帧，最后取中位数。
 constexpr int kRequiredSamples = 4; // old PICTURECAL_TIMES=3 means first + 3 updates
-constexpr int kMaximumFrames = 120;
+constexpr int kMaximumFrames = 300;
 
 // processFrame() 对一张图的处理结果；Result 则是多帧融合后的任务结果。
 struct FrameResult {
@@ -33,6 +36,21 @@ struct FrameResult {
     QStringList diagnostics;
     cv::Mat annotated;
 };
+
+cv::Mat measurementRoi(const cv::Mat &frame)
+{
+    if (frame.empty())
+        return cv::Mat();
+
+    const int crop = static_cast<int>(std::lround(frame.cols
+                                                   * kHorizontalCropRatio));
+    const int roiWidth = frame.cols - crop * 2;
+    if (crop <= 0 || roiWidth <= 0)
+        return frame.clone();
+
+    // clone() 让后台处理持有独立且连续的图像数据，避免依赖原始帧生命周期。
+    return frame(cv::Rect(crop, 0, roiWidth, frame.rows)).clone();
+}
 
 QString imageDataUrl(const cv::Mat &bgr)
 {
@@ -426,19 +444,14 @@ FrameResult processFrame(const cv::Mat &frame, bool shortFocus)
                                   .arg(lineDistance, 0, 'f', 2));
     // 第5步：像素距离除以 px/mm，得到设备标定需要的实际高度（毫米）。
     result.height = lineDistance / pixelPerMm;
-    // 同步 wifiTcp 的分段补偿：阈值为像素，补偿量为毫米。
-    // 原程序遗漏 [-10,10] 像素分支；这里保留该区间的未补偿值。
-    if (lineDistance > 10.0)
-        result.height -= 10.0;
-    else if (lineDistance < -10.0)
-        result.height += 10.0;
+    // 型号相关补偿由控制器在得到毫米高度后执行。
     if (!std::isfinite(result.height) || std::abs(result.height) > 5000.0) {
         result.error = QStringLiteral("视觉计算高度超出有效范围: %1 mm")
                            .arg(result.height, 0, 'f', 3);
         return result;
     }
     result.diagnostics.append(QStringLiteral(
-        "视觉高度计算成功：有符号距离=%1 px，比例=%2 px/mm，补偿后=%3 mm")
+        "视觉高度计算成功：有符号距离=%1 px，比例=%2 px/mm，原始高度=%3 mm")
                                   .arg(lineDistance, 0, 'f', 2)
                                   .arg(pixelPerMm, 0, 'f', 6)
                                   .arg(result.height, 0, 'f', 3));
@@ -661,7 +674,7 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
             return result;
         }
 
-        cv::Mat annotated = frame.clone();
+        cv::Mat annotated = measurementRoi(frame);
         cv::putText(annotated, "SIMULATED MEASUREMENT",
                     cv::Point(30, 55), cv::FONT_HERSHEY_SIMPLEX, 1.1,
                     cv::Scalar(0, 215, 255), 2, cv::LINE_AA);
@@ -696,7 +709,10 @@ LaserVisionProcessor::Result LaserVisionProcessor::runMeasurement(
             continue;
         }
         ++framesRead;
-        const FrameResult measurement = processFrame(frame, shortFocus);//单帧处理
+        // 使用未经放大的中央原始像素 ROI 计算；裁剪只排除左右干扰区，
+        // 不会改变 px/mm 比例，也不会制造额外的“虚拟像素”。
+        const cv::Mat roi = measurementRoi(frame);
+        const FrameResult measurement = processFrame(roi, shortFocus);//单帧处理
         latestAttemptDiagnostics = measurement.diagnostics;
         if (!measurement.success) {
             latestError = measurement.error;

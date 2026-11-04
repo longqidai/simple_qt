@@ -30,7 +30,8 @@ constexpr int kReceiverTimeoutAttempts = 20;
 // 实机通常很快返回，但手工使用 SSCOM 时需要留出足够输入时间。
 constexpr int kFaceTimeoutMs = 60000;
 constexpr int kAngleTimeoutMs = 20000;
-constexpr int kVisionTimeoutMs = 45000;
+constexpr int kVisionTimeoutMs = 150000;
+constexpr int kMaximumArmBufferBytes = 10 * 1024;
 
 #ifdef Q_OS_WIN
 bool installOpenWifiProfile(HANDLE clientHandle, const GUID &interfaceGuid,
@@ -444,6 +445,7 @@ bool LaserCalibrationController::startCalibration(const QVariantList &leftSlots,
     m_currentIndex = -1;
     m_currentFace = 0;
     m_faceRestBits = 0;
+    m_consumedFaceCompletionMask = 0;
     m_visionTarget = VisionTarget::None;
     m_vision.cancelPendingResult();
     m_laserDistance = 0.0;
@@ -596,17 +598,24 @@ void LaserCalibrationController::appendLog(const QString &text)
     emit logEntryAdded(entry);
 }
 
-void LaserCalibrationController::sendArm(const QByteArray &command)
+bool LaserCalibrationController::sendArm(const QByteArray &command)
 {
     if (m_armSocket.state() != QAbstractSocket::ConnectedState) {
         appendLog(QStringLiteral("机械臂指令未发送（TCP 未连接）: %1")
                       .arg(QString::fromLatin1(command).trimmed()));
-        return;
+        return false;
     }
-    m_armSocket.write(command);
+    const qint64 accepted = m_armSocket.write(command);
+    if (accepted != command.size()) {
+        appendLog(QStringLiteral("[机械臂发送失败] 写入=%1/%2 字节，错误=%3，指令=%4")
+                      .arg(accepted).arg(command.size()).arg(m_armSocket.errorString())
+                      .arg(QString::fromLatin1(command).trimmed()));
+        return false;
+    }
     m_armSocket.flush();
     appendLog(QStringLiteral("发送机械臂: %1")
                   .arg(QString::fromLatin1(command).trimmed()));
+    return true;
 }
 
 bool LaserCalibrationController::sendReceiver(const QByteArray &command)
@@ -631,16 +640,13 @@ bool LaserCalibrationController::sendReceiver(const QByteArray &command)
 
 void LaserCalibrationController::processArmBuffer()
 {
-    if (m_state == State::WaitingSn) {
-        const QString pending = QString::fromUtf8(m_armBuffer).trimmed();
-        static const QRegularExpression snPattern(//匹配成统一SN号
-            QStringLiteral("(?:SNFF)?([A-Za-z][A-Za-z0-9_-]{6,})"));
-        const QRegularExpressionMatch match = snPattern.match(pending);
-        if (match.hasMatch() && !pending.contains(QStringLiteral("MT,"))) {
-            m_armBuffer.clear();
-            handleScannedSn(match.captured(1));
-            return;
-        }
+    // TCP 会拆包或合包；只消费带 $* 或换行结束符的完整帧。
+    if (m_armBuffer.size() > kMaximumArmBufferBytes) {
+        appendLog(QStringLiteral("机械臂接收缓冲区超过 10 KB，已清空异常数据"));
+        m_armBuffer.clear();
+        if (m_running)
+            failCurrentSlot(QStringLiteral("机械臂报文持续无结束符，协议数据异常"));
+        return;
     }
 
     while (!m_armBuffer.isEmpty()) {
@@ -686,10 +692,35 @@ void LaserCalibrationController::processArmFrame(const QString &frame)
             setState(State::Idle, QStringLiteral("机械臂已就绪，可选择槽位开始标定"));
         return;
     }
+    // 此报文表示机械臂无法安全自动复位。停止整批流程，等待人工检查，
+    // 绝不能继续向下一个槽位发送运动指令。
+    if (frame.contains(QStringLiteral("MANUAL_RECOVERY"), Qt::CaseInsensitive)) {
+        const QString reason = QStringLiteral("机械臂要求人工恢复，请检查设备和机械臂位置后重新开始");
+        m_stepTimer.stop();
+        ensureReceiverSafe();
+        setError(reason);
+        appendLog(reason);
+        if (m_running && m_currentIndex >= 0 && m_currentIndex < m_slots.size()
+            && !m_currentResultRecorded) {
+            updateSlotStatus(m_slots.at(m_currentIndex).tray,
+                             m_slots.at(m_currentIndex).slot,
+                             QStringLiteral("failed"));
+            addResult(false, reason);
+            m_currentResultRecorded = true;
+        }
+        m_running = false;
+        m_paused = false;
+        m_state = State::Idle;
+        emit runningChanged();
+        emit pausedChanged();
+        return;
+    }
     if (frame.contains(QStringLiteral("FAILED"), Qt::CaseInsensitive)) {
         if (m_state == State::WaitingPutback || m_state == State::Aborting) {
             if (m_state == State::Aborting)
                 finishAbort();
+            else if (m_currentResultRecorded)
+                appendLog(QStringLiteral("已忽略机械臂重复发送的放回结果"));
             else
                 completeCurrentSlot(false, m_pendingReason.isEmpty()
                                              ? QStringLiteral("机械臂报告失败")
@@ -709,15 +740,27 @@ void LaserCalibrationController::processArmFrame(const QString &frame)
 
 void LaserCalibrationController::handleArmOk()
 {
-    m_stepTimer.stop();
     switch (m_state) {
     case State::WaitingPoint1:
+        m_stepTimer.stop();
         requestPlanarCalibration(1);
         break;
     case State::WaitingPoint2:
+        m_stepTimer.stop();
+        // 这里虽然复用 WaitingPoint2 这个“第二次面校准”的逻辑状态，
+        // 但机械臂实际到达的是 NEXT3。旧上位机 wifiTcp_test3 在面1完成后
+        // 会跳过 NEXT2，直接在 NEXT3 姿态执行第二次面校准。
+        // 到位后先打开激光、开启连续测距并进入自动测量，
+        // 再发送第二面的平面校准指令。不能等第二面校准结束后才开激光，
+        // 否则接收机执行第二面校准时使用的激光/测距状态与旧上位机不同。
+        sendReceiver("set laser on\r\n");
+        sendReceiver("log laserrangingb ontime 1\r\n");
+        sendReceiver("set laser survey auto\r\n");
+        appendLog(QStringLiteral("机械臂已到达第二面姿态，已开启激光和连续测距，开始面 2 校准"));
         requestPlanarCalibration(2);
         break;
     case State::WaitingPoint3:
+        m_stepTimer.stop();
         // 旧版在机械臂到达远点后重新开启测距，等待报文稳定后才拍远焦图。
         sendReceiver("log laserrangingb ontime 1\r\n");
         sendReceiver("set laser survey auto\r\n");
@@ -728,22 +771,35 @@ void LaserCalibrationController::handleArmOk()
         });
         break;
     case State::WaitingPoint4:
+        m_stepTimer.stop();
         appendLog(QStringLiteral("机械臂已到达 NEXT4 校准姿态，开始面 3 校准"));
         requestPlanarCalibration(3);
         break;
     case State::WaitingPoint5:
+        m_stepTimer.stop();
         requestPlanarCalibration(4);
         break;
     case State::WaitingPoint6:
+        m_stepTimer.stop();
         requestPlanarCalibration(5);
         break;
     case State::WaitingPoint7:
+        m_stepTimer.stop();
         requestPlanarCalibration(6);
         break;
     case State::WaitingPutback:
+        if (m_currentResultRecorded) {
+            appendLog(QStringLiteral("已忽略机械臂重复发送的放回 OK"));
+            break;
+        }
+        m_stepTimer.stop();
+        // SUCCESS 后机械臂只完成放回并回复 OK，仍在当前槽位循环内；
+        // END 让 GRR 回到 BEGIN，随后才能接收下一槽位的 SETMOD。
+        sendArm("$$MT,END\r\n");
         completeCurrentSlot(m_pendingSuccess, m_pendingReason);
         break;
     case State::Aborting:
+        m_stepTimer.stop();
         finishAbort();
         break;
     default:
@@ -1003,9 +1059,7 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
                   .arg(report.panelId).arg(report.restState)
                   .arg(report.restBits & 0x3f, 2, 16, QLatin1Char('0'))
                   .arg(report.sideState).arg(report.errorCode));
-    // $LASERBACK 的 restBits 是六个面的累计完成掩码。部分 SSCOM
-    // 简化报文会在每一面都固定填写 1，因此还要根据“当前面已静置完成”
-    // 补上对应位，并与本槽位已经完成的位合并，保证状态只增不减。
+    // $LASERBACK 的 restBits 是接收机物理面的累计完成掩码。
     int restBits = report.restBits & 0x3f;           //去掉最高两位
     // 部分固件最后一个字段上报的是机械臂点位（1~7），而不是面号；
     // 点位7仍对应面6。因此超出1~6时使用状态机当前正在校准的面。
@@ -1015,19 +1069,16 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         && completedFace >= 1 && completedFace <= 6) {
         restBits |= (1 << (completedFace - 1));  //把当前面的 bit 设置成1
     }
-    restBits |= m_faceRestBits;
-    if (m_faceRestBits != restBits) {
-        m_faceRestBits = restBits;
+    const int accumulatedBits = m_faceRestBits | restBits;
+    if (m_faceRestBits != accumulatedBits) {
+        m_faceRestBits = accumulatedBits;
         emit faceRestBitsChanged();   //状态确实发生变化时更新界面
         appendLog(QStringLiteral("面静置状态已更新：%1")
                       .arg(m_faceRestBits, 6, 2, QLatin1Char('0')));
     }
 
-    if (report.panelId >= 1 && report.panelId <= 6
-        && report.panelId != m_currentFace) {
-        m_currentFace = report.panelId;
-        emit faceChanged();
-    }
+    // 不使用 panelId 覆盖 m_currentFace：GRR 的逻辑动作顺序与接收机物理面号
+    // 并不相同，例如部分 GRR20 路径第一次校准会完成物理面3（mask=0x04）。
     if (report.errorCode != 0) {   //错误码不为0：有错误
         const QString detail = report.errorCode == 1
             ? QStringLiteral("激光外参校准失败，需要复位整个流程")
@@ -1048,6 +1099,24 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         appendLog(QStringLiteral("激光角度校准完成: pitch=%1, yaw=%2")
                       .arg(m_finalPitch, 0, 'f', 6)
                       .arg(m_finalYaw, 0, 'f', 6));
+
+        // 与 wifiTcp_test3 的 dataSidSuccessSaveSlot() 保持一致：
+        // 接收机完成六参数角度校准并返回最终 pitch/yaw 后，还要把结果写回设备。
+        // 设备协议要求参数顺序为 yaw、pitch；旧上位机会连续发送两次相同命令，
+        // 这里保留相同的重复写入行为，避免只计算出结果却没有保存到设备。
+        const QString writeBackCommand = QStringLiteral("set laser angle %1 %2\r\n")
+                                             .arg(m_finalYaw)
+                                             .arg(m_finalPitch);
+        appendLog(QStringLiteral("开始将角度标定结果写回设备: yaw=%1, pitch=%2")
+                      .arg(m_finalYaw, 0, 'f', 6)
+                      .arg(m_finalPitch, 0, 'f', 6));
+        if (!sendReceiver(writeBackCommand.toUtf8())
+            || !sendReceiver(writeBackCommand.toUtf8())) {
+            failCurrentSlot(QStringLiteral("角度标定结果写回设备失败"));
+            return;
+        }
+        appendLog(QStringLiteral("角度标定结果已按旧上位机流程连续写回设备两次"));
+
         // NEXT1 负责夹取，NEXT2～NEXT7 对应后续姿态。角度校准完成后
         // 不再增加额外标定点编号，直接通知机械臂执行“回 Home + 安全放回”。
         ensureReceiverSafe(); //关闭激光
@@ -1060,20 +1129,59 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         return;
     }
 
-    if (report.restState != 2)
+    const bool waitingForFace = m_state == State::WaitingFace1
+        || m_state == State::WaitingFace2
+        || m_state == State::WaitingFace3
+        || m_state == State::WaitingFace4
+        || m_state == State::WaitingFace5
+        || m_state == State::WaitingFace6;
+    if (!waitingForFace)
         return;
-    appendLog(QStringLiteral("面 %1 静置与面校准完成").arg(m_currentFace));
+
+    // 与 wifiTcp_test3 相同：任一尚未消费的物理面完成位出现，就说明当前
+    // 逻辑步骤已经完成。不能强制等待 restState==2，否则 mask 已更新但
+    // restState 仍为1的固件会一直等待到超时。
+    const int newlyCompleted = restBits & (~m_consumedFaceCompletionMask) & 0x3f;
+    appendLog(QStringLiteral("[面完成判定] 逻辑面=%1，物理面=%2，状态=%3，掩码=0x%4，已消费=0x%5，新增=0x%6")
+                  .arg(m_currentFace).arg(report.panelId).arg(report.restState)
+                  .arg(restBits, 2, 16, QLatin1Char('0'))
+                  .arg(m_consumedFaceCompletionMask, 2, 16, QLatin1Char('0'))
+                  .arg(newlyCompleted, 2, 16, QLatin1Char('0')));
+    if (newlyCompleted == 0)
+        return;
+
+    m_consumedFaceCompletionMask |= restBits;
+    m_stepTimer.stop();
+    m_faceDiagnosticsActive = false;
+    appendLog(QStringLiteral("逻辑面 %1 校准完成（接收机物理面 %2）")
+                  .arg(m_currentFace).arg(report.panelId));
     switch (m_state) {
     case State::WaitingFace1:
-        moveToPoint(2);
+        // 严格复现旧上位机当前实际运行路线：面1完成后不走 NEXT2（右向姿态），
+        // 而是直接发送 NEXT3，在该姿态完成第二次面校准。这里复用
+        // WaitingPoint2 仅表示“等待第二次面校准姿态”，并不表示发送 NEXT2。
+        if (!m_armReady) {
+            failCurrentSlot(QStringLiteral("机械臂未就绪，无法移动到第二次面校准姿态 NEXT3"));
+            return;
+        }
+        if (!sendArm("$$MT,NEXT3\r\n")) {
+            failCurrentSlot(QStringLiteral("发送机械臂 NEXT3 指令失败"));
+            return;
+        }
+        setState(State::WaitingPoint2,
+                 QStringLiteral("等待机械臂到达 NEXT3 第二次面校准姿态"),
+                 kArmMoveTimeoutMs);
         break;
     case State::WaitingFace2:
         // 单摄像头方案：固定近点，直接移动到垂直远点。
-        m_verticalNear = 520.0;
+        m_verticalNear = m_verticalLineHeight;
         m_horizontalNear = m_horizontalLineHeight;
         emit measurementChanged();
-        appendLog(QStringLiteral("近点固定：水平=%1 mm，垂直=520 mm；跳过近焦测量").arg(m_horizontalNear));
-        sendReceiver("set laser on\r\n");
+        appendLog(QStringLiteral("%1 近点固定：水平=%2 mm，垂直=%3 mm；跳过近焦测量")
+                      .arg(m_deviceModel).arg(m_horizontalNear).arg(m_verticalNear));
+        // 第二次面校准开始前已经开启激光和连续测距；完成后只停止连续测距，
+        // 再按旧上位机流程重复发送 NEXT3。第二次 NEXT3 到位后才开始垂直远点
+        // 测量，不能直接沿用第一次 NEXT3 的到位事件。
         sendReceiver("log laserrangingb ontime 0\r\n");
         moveToPoint(3);
         break;
@@ -1105,11 +1213,24 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
 bool LaserCalibrationController::validateMeasurements(const QVariantMap &measurements,
                                                          QString *reason)
 {
-    if (!finiteNumber(measurements.value(QStringLiteral("horizontalLineHeight")),
-                      &m_horizontalLineHeight)
-        || m_horizontalLineHeight <= 0.0) {
+    m_deviceModel = measurements.value(QStringLiteral("deviceModel"),
+                                       QStringLiteral("GRR20")).toString().trimmed().toUpper();
+    if (m_deviceModel == QStringLiteral("GRR20_M8_N8"))
+        m_deviceModel = QStringLiteral("GRR20");
+
+    // 与已在产线验证的 wifiTcp_test3 一致，固定近点由型号决定。
+    if (m_deviceModel == QStringLiteral("GRR13")) {
+        m_horizontalLineHeight = 721.0;
+        m_verticalLineHeight = 507.0;
+    } else if (m_deviceModel == QStringLiteral("GRR17")) {
+        m_horizontalLineHeight = 770.0;
+        m_verticalLineHeight = 490.0;
+    } else if (m_deviceModel == QStringLiteral("GRR20")) {
+        m_horizontalLineHeight = 615.0;
+        m_verticalLineHeight = 511.0;
+    } else {
         if (reason)
-            *reason = QStringLiteral("请选择有效的 GRR20 水平线高参数");
+            *reason = QStringLiteral("请选择有效的机械臂型号：GRR13、GRR17 或 GRR20");
         return false;
     }
     return true;
@@ -1152,6 +1273,7 @@ void LaserCalibrationController::beginCurrentSlot()
     m_horizontalFarRange = 0.0;
     m_currentFace = 0;
     m_faceRestBits = 0;
+    m_consumedFaceCompletionMask = 0;
     m_receiverBuffer.clear();
     emit deviceInfoChanged();
     emit faceChanged();
@@ -1162,15 +1284,24 @@ void LaserCalibrationController::beginCurrentSlot()
     //拼接机械臂指令，左托盘使用 SETMOD1，右托盘使用 SETMOD2
     const QByteArray mode = slot.tray == QStringLiteral("left")
         ? QByteArray("$$MT,SETMOD1\r\n") : QByteArray("$$MT,SETMOD2\r\n");
-    sendArm(mode);
+    if (!sendArm(mode)) {
+        failCurrentSlot(QStringLiteral("发送机械臂托盘模式失败"));
+        return;
+    }
     QTimer::singleShot(120, this, [this, slot] {
         if (!m_running || m_currentIndex < 0)
             return;
-        sendArm(QByteArray::number(slot.slot) + "\r\n");
+        if (!sendArm(QByteArray::number(slot.slot) + "\r\n")) {
+            failCurrentSlot(QStringLiteral("发送机械臂槽位号失败"));
+            return;
+        }
         QTimer::singleShot(120, this, [this] {
             if (!m_running)
                 return;
-            sendArm("$$MT,NEXT\r\n");  //扫码返回sn号
+            if (!sendArm("$$MT,NEXT\r\n")) {
+                failCurrentSlot(QStringLiteral("发送机械臂扫码指令失败"));
+                return;
+            }
             setState(State::WaitingSn,
                      QStringLiteral("等待机械臂扫描 %1托盘 %2 号位")
                          .arg(m_slots.at(m_currentIndex).tray == QStringLiteral("left")
@@ -1301,7 +1432,10 @@ void LaserCalibrationController::moveToPoint(int point)
         failCurrentSlot(QStringLiteral("机械臂未就绪，无法移动到标定点 %1").arg(point));
         return;
     }
-    sendArm(QStringLiteral("$$MT,NEXT%1\r\n").arg(point).toLatin1());
+    if (!sendArm(QStringLiteral("$$MT,NEXT%1\r\n").arg(point).toLatin1())) {
+        failCurrentSlot(QStringLiteral("发送机械臂 NEXT%1 指令失败").arg(point));
+        return;
+    }
     State target = State::WaitingPoint1;
     if (point == 2) target = State::WaitingPoint2;
     else if (point == 3) target = State::WaitingPoint3;
@@ -1403,6 +1537,18 @@ void LaserCalibrationController::handleVisionMeasurement(
         return;
     }
 
+    // wifiTcp_test3 按换算后的毫米高度补偿。GRR13 不补偿；
+    // GRR17/GRR20 仅在绝对高度超过 10 mm 时向零点方向补偿 10 mm。
+    const double rawHeight = height;
+    if (m_deviceModel != QStringLiteral("GRR13")) {
+        if (height > 10.0)
+            height -= 10.0;
+        else if (height < -10.0)
+            height += 10.0;
+    }
+    appendLog(QStringLiteral("[%1 视觉补偿] 原始=%2 mm，标定使用=%3 mm")
+                  .arg(m_deviceModel).arg(rawHeight, 0, 'f', 3).arg(height, 0, 'f', 3));
+
     QString name;//根据测量目标保存结果
     if (completedTarget == VisionTarget::VerticalNear) {
         name = QStringLiteral("垂直近点");
@@ -1453,7 +1599,7 @@ void LaserCalibrationController::handleVisionMeasurement(
 
 bool LaserCalibrationController::calculateAngleInputs(QString *reason)
 {
-    // GRR20 固定近点；只需两次远点实测。视觉高度允许负数，测距必须为正。
+    // 当前 GRR 型号使用各自固定近点；只需两次远点实测。
     if (!std::isfinite(m_verticalFarRawHeight) || !std::isfinite(m_horizontalFarRawHeight)
         || !std::isfinite(m_verticalFarRange) || m_verticalFarRange <= 0.0
         || !std::isfinite(m_horizontalFarRange) || m_horizontalFarRange <= 0.0) {
@@ -1462,7 +1608,7 @@ bool LaserCalibrationController::calculateAngleInputs(QString *reason)
         return false;
     }
     m_horizontalNear = m_horizontalLineHeight;
-    m_verticalNear = 520.0;
+    m_verticalNear = m_verticalLineHeight;
     m_horizontalFar = m_horizontalFarRawHeight;
     m_horizontalLength = m_horizontalFarRange;
     m_verticalFar = m_verticalFarRawHeight;
@@ -1886,7 +2032,8 @@ QString LaserCalibrationController::normalizeSn(const QString &value)
     candidate.remove('\n');
     if (candidate.startsWith(QStringLiteral("SNFF"), Qt::CaseInsensitive))
         candidate = candidate.mid(4);
-    static const QRegularExpression token(QStringLiteral("([A-Za-z][A-Za-z0-9_-]{6,})"));
+    // GRR 扫码报文为 SNFF + 9 位 SN；完整匹配可避免半包和日志文字被当成设备号。
+    static const QRegularExpression token(QStringLiteral("^([A-Za-z0-9_-]{9})$"));
     const QRegularExpressionMatch match = token.match(candidate);
     if (!match.hasMatch())
         return QString();

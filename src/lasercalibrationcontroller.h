@@ -178,7 +178,7 @@ private:
     void setProgress(const QString &text);
     void setError(const QString &text);
     void appendLog(const QString &text);
-    void sendArm(const QByteArray &command);
+    bool sendArm(const QByteArray &command);
     bool sendReceiver(const QByteArray &command);
     void processArmBuffer();
     void processArmFrame(const QString &frame);
@@ -258,6 +258,8 @@ private:
     int m_currentFace = 0;
     // $LASERBACK 的六位静置完成掩码：bit0~bit5 分别对应面1~面6。
     int m_faceRestBits = 0;
+    // 当前接收机已经用于推进流程的完成位；机械臂逻辑面序号不等于接收机物理面号。
+    int m_consumedFaceCompletionMask = 0;
     int m_slotRevision = 0;
     VisionTarget m_visionTarget = VisionTarget::None;
 
@@ -283,7 +285,9 @@ private:
     double m_verticalNear = 0.0;
     double m_verticalFar = 0.0;
     double m_verticalLength = 0.0;
+    QString m_deviceModel = QStringLiteral("GRR20");
     double m_horizontalLineHeight = 0.0;
+    double m_verticalLineHeight = 0.0;
     double m_verticalCloseRawHeight = 0.0;
     double m_verticalCloseRange = 0.0;
     double m_verticalFarRawHeight = 0.0;

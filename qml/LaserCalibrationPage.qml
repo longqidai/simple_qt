@@ -131,7 +131,7 @@ ScrollView {
         if (!controller) return
         controller.startCalibration(
             selectedSlots(leftModel), selectedSlots(rightModel), {
-                "horizontalLineHeight": horizontalLineHeight.text
+                "deviceModel": robotModel.currentText
             })
     }
 
@@ -302,8 +302,23 @@ ScrollView {
                         TextField { id: verticalNear; Layout.fillWidth: true; text: controller && controller.verticalNear !== 0 ? controller.verticalNear.toFixed(3) : "--"; horizontalAlignment: Text.AlignHCenter; readOnly: true }
                         TextField { id: verticalFar; Layout.fillWidth: true; text: controller && controller.verticalFar !== 0 ? controller.verticalFar.toFixed(3) : "--"; horizontalAlignment: Text.AlignHCenter; readOnly: true }
                         TextField { id: verticalLength; Layout.fillWidth: true; text: controller && controller.verticalLength !== 0 ? controller.verticalLength.toFixed(3) : "--"; horizontalAlignment: Text.AlignHCenter; readOnly: true }
-                        Label { text: qsTr("GRR20 水平线高"); color: page.textColor }
-                        TextField { id: horizontalLineHeight; Layout.fillWidth: true; text: "620"; horizontalAlignment: Text.AlignHCenter; readOnly: true }
+                        Label { text: qsTr("机械臂型号"); color: page.textColor }
+                        ComboBox {
+                            id: robotModel
+                            Layout.fillWidth: true
+                            model: ["GRR13", "GRR17", "GRR20"]
+                            currentIndex: 2
+                            enabled: controller && !controller.running
+                        }
+                        Label { text: qsTr("固定近点"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                        Label {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            color: page.textColor
+                            text: robotModel.currentText === "GRR13" ? qsTr("水平 721 / 垂直 507 mm")
+                                  : robotModel.currentText === "GRR17" ? qsTr("水平 770 / 垂直 490 mm")
+                                  : qsTr("水平 615 / 垂直 511 mm")
+                        }
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -469,8 +484,8 @@ ScrollView {
                                 Label { Layout.preferredWidth: 48; text: qsTr("托盘"); font.bold: true; color: page.secondaryTextColor }
                                 Label { Layout.preferredWidth: 42; text: qsTr("槽位"); font.bold: true; color: page.secondaryTextColor }
                                 Label { Layout.preferredWidth: 100; text: qsTr("SN"); font.bold: true; color: page.secondaryTextColor }
-                                Label { Layout.preferredWidth: 90; text: qsTr("距离 mm"); font.bold: true; color: page.secondaryTextColor }
-                                Label { Layout.preferredWidth: 90; text: qsTr("高度 mm"); font.bold: true; color: page.secondaryTextColor }
+                                Label { Layout.preferredWidth: 90; text: qsTr("Pitch"); font.bold: true; color: page.secondaryTextColor }
+                                Label { Layout.preferredWidth: 90; text: qsTr("Yaw"); font.bold: true; color: page.secondaryTextColor }
                                 Label { Layout.fillWidth: true; text: qsTr("结果"); font.bold: true; color: page.secondaryTextColor }
                             }
                             ListView {
@@ -482,8 +497,8 @@ ScrollView {
                                     Label { Layout.preferredWidth: 48; text: modelData.trayText }
                                     Label { Layout.preferredWidth: 42; text: modelData.slot }
                                     Label { Layout.preferredWidth: 100; text: modelData.sn || "--" }
-                                    Label { Layout.preferredWidth: 90; text: Number(modelData.distance).toFixed(2) }
-                                    Label { Layout.preferredWidth: 90; text: Number(modelData.height).toFixed(2) }
+                                    Label { Layout.preferredWidth: 90; text: Number(modelData.pitch).toFixed(6) }
+                                    Label { Layout.preferredWidth: 90; text: Number(modelData.yaw).toFixed(6) }
                                     Label { Layout.fillWidth: true; text: modelData.result + (modelData.error ? ": " + modelData.error : ""); color: modelData.success ? "#16a34a" : "#dc2626"; elide: Text.ElideRight }
                                 }
                                 Label { anchors.centerIn: parent; visible: !controller || controller.results.length === 0; text: qsTr("暂无标定数据"); color: "#98a2b3" }
