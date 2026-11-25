@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QVector>
 
 #include <functional>
@@ -118,6 +119,7 @@ signals:
     void statisticsChanged();
     void lastErrorChanged();
     void commandReceived(const QString &command);
+    void slamResultRecorded(const QVariantMap &row);
 
 private slots:
     void onArmConnected();
@@ -154,6 +156,7 @@ private:
         StoppingModeling,
         EnsuringMeasurementStopped,
         Downloading,
+        FinishingCollection,
         WaitingPutBack,
         Recovering,
         Completed,
@@ -218,6 +221,9 @@ private:
     bool publishModelingPreinit();
     bool publishModelingAction(bool start, bool updateFlow = true);
     bool publishCollectAction(const QString &action, bool updateFlow = true);
+    void requestCollectFinish(const QString &context,
+                              const std::function<void(bool)> &continuation);
+    void completeCollectFinish(bool success, const QString &detail);
     void tryStartModelingWhenArmHome();
     void retryCollectStartAfterStop();
     bool measurementMayBeActive() const;
@@ -333,6 +339,7 @@ private:
     int m_modelingStartRetries;
     int m_collectStartRecoveryAttempts;
     bool m_retryCollectAfterStop;
+    std::function<void(bool)> m_collectFinishContinuation;
 
     QUrl m_ftpUrl;
     QString m_ftpUser;

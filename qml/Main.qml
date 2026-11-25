@@ -21,8 +21,12 @@ ApplicationWindow {
     property bool closeAfterSafeStop: false
     property string calibrationMode: "laser"
     property var databaseRows: []
+
+
     // 任一模式已经连接机械臂后锁定标定模式，断开机械臂后才允许切换。
     readonly property bool modeSwitchLocked: tcpController.connected || laserController.armConnected
+
+
 
     // 根据窗口宽度动态调整字体和间距
     property real scaleFactor: Math.max(0.75, Math.min(1.5, width / 1400))
@@ -165,6 +169,14 @@ ApplicationWindow {
                 + selectedSlots(rightSelection).length + revision * 0
     }
 
+    function setAllSlots(model, selected) {
+        if (tcpController.selectedCount > 0)
+            tcpController.clearTaskResults()
+        for (var i = 0; i < model.count; ++i)
+            model.setProperty(i, "selected", selected)
+        ++selectionRevision
+    }
+
     function backendSlotState(side, index) {
         var states = side === "left" ? tcpController.leftSlotStates
                                       : tcpController.rightSlotStates
@@ -268,7 +280,7 @@ ApplicationWindow {
         width: Math.min(window.width - 60, 1120)
         height: Math.min(window.height - 60, 650)
         anchors.centerIn: parent
-        title: qsTr("激光标定数据库")
+        title: qsTr("标定历史数据库")
         standardButtons: Dialog.Close
 
         ColumnLayout {
@@ -303,7 +315,7 @@ ApplicationWindow {
 
                 Item {
                     id: databaseTable
-                    width: 1730
+                    width: 2140
                     height: databaseTableFlick.height - 14
 
                     Rectangle {
@@ -318,6 +330,7 @@ ApplicationWindow {
                             spacing: 8
                             Label { Layout.preferredWidth: 45; text: "ID"; font.bold: true }
                             Label { Layout.preferredWidth: 155; text: qsTr("时间"); font.bold: true }
+                            Label { Layout.preferredWidth: 60; text: qsTr("类型"); font.bold: true }
                             Label { Layout.preferredWidth: 55; text: qsTr("托盘"); font.bold: true }
                             Label { Layout.preferredWidth: 45; text: qsTr("槽位"); font.bold: true }
                             Label { Layout.preferredWidth: 120; text: "SN"; font.bold: true }
@@ -329,6 +342,7 @@ ApplicationWindow {
                             Label { Layout.preferredWidth: 90; text: "Yaw"; font.bold: true }
                             Label { Layout.preferredWidth: 75; text: qsTr("成功状态"); font.bold: true }
                             Label { Layout.preferredWidth: 300; text: qsTr("错误信息"); font.bold: true }
+                            Label { Layout.preferredWidth: 330; text: qsTr("数据路径"); font.bold: true }
                             Label { Layout.preferredWidth: 330; text: "BiasBuf"; font.bold: true }
                         }
                     }
@@ -353,22 +367,24 @@ ApplicationWindow {
                                 spacing: 8
                                 Label { Layout.preferredWidth: 45; text: modelData.id }
                                 Label { Layout.preferredWidth: 155; text: modelData.time; elide: Text.ElideRight; ToolTip.text: text; ToolTip.visible: hovered }
+                                Label { Layout.preferredWidth: 60; text: modelData.mode === "slam" ? "SLAM" : qsTr("激光") }
                                 Label { Layout.preferredWidth: 55; text: modelData.trayText || "--" }
                                 Label { Layout.preferredWidth: 45; text: modelData.slot }
                                 Label { Layout.preferredWidth: 120; text: modelData.sn || "--"; elide: Text.ElideRight }
                                 Label { Layout.preferredWidth: 65; text: modelData.hardware || "--"; elide: Text.ElideRight }
                                 Label { Layout.preferredWidth: 100; text: modelData.version || "--"; elide: Text.ElideRight }
-                                Label { Layout.preferredWidth: 85; text: Number(modelData.distance).toFixed(3) }
-                                Label { Layout.preferredWidth: 85; text: Number(modelData.height).toFixed(3) }
-                                Label { Layout.preferredWidth: 90; text: Number(modelData.pitch).toFixed(6) }
-                                Label { Layout.preferredWidth: 90; text: Number(modelData.yaw).toFixed(6) }
+                                Label { Layout.preferredWidth: 85; text: modelData.mode === "laser" ? Number(modelData.distance).toFixed(3) : "--" }
+                                Label { Layout.preferredWidth: 85; text: modelData.mode === "laser" ? Number(modelData.height).toFixed(3) : "--" }
+                                Label { Layout.preferredWidth: 90; text: modelData.mode === "laser" ? Number(modelData.pitch).toFixed(6) : "--" }
+                                Label { Layout.preferredWidth: 90; text: modelData.mode === "laser" ? Number(modelData.yaw).toFixed(6) : "--" }
                                 Label {
                                     Layout.preferredWidth: 75
                                     text: modelData.success ? "1 (成功)" : "0 (失败)"
                                     color: modelData.success ? "#15803d" : "#b91c1c"
                                 }
                                 Label { Layout.preferredWidth: 300; text: modelData.error || "--"; elide: Text.ElideRight; ToolTip.text: text; ToolTip.visible: hovered }
-                                Label { Layout.preferredWidth: 330; text: modelData.bias || "[]"; elide: Text.ElideRight; ToolTip.text: text; ToolTip.visible: hovered }
+                                Label { Layout.preferredWidth: 330; text: modelData.dataPath || "--"; elide: Text.ElideMiddle; ToolTip.text: text; ToolTip.visible: hovered }
+                                Label { Layout.preferredWidth: 330; text: modelData.mode === "laser" ? (modelData.bias || "[]") : "--"; elide: Text.ElideRight; ToolTip.text: text; ToolTip.visible: hovered }
                             }
                         }
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
@@ -547,7 +563,42 @@ ApplicationWindow {
                             font.pixelSize: 12 * scaleFactor
 
 
-                            onClicked: tcpController.toggleConnection()
+
+
+
+
+
+
+
+
+
+
+
+                            // 点击时直接提交输入框当前值。不能依赖 editingFinished，
+                            // 否则刚输入远程电脑 IP 后立即点击会仍连接旧地址。
+                            onClicked: {
+                                if (!tcpController.connected) {
+                                    tcpController.host = hostField.text.trim()
+                                    if (portField.acceptableInput)
+                                        tcpController.port = parseInt(portField.text)
+                                }
+                                tcpController.toggleConnection()
+                            }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
                         }
@@ -629,7 +680,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 700 * scaleFactor
                     Layout.minimumWidth: 0
-                    implicitHeight: 350 * scaleFactor
+                    implicitHeight: 400 * scaleFactor
                     radius: 12 * scaleFactor
                     color: "white"
                     border.color: window.borderColor
@@ -680,7 +731,7 @@ ApplicationWindow {
 
                                     Grid {
                                         anchors.centerIn: parent
-                                        anchors.verticalCenterOffset: 12 * scaleFactor
+                                        anchors.verticalCenterOffset: -8 * scaleFactor
                                         columns: 2
                                         rows: 4
                                         spacing: 10 * scaleFactor
@@ -718,6 +769,29 @@ ApplicationWindow {
                                             }
                                         }
                                     }
+
+                                    RowLayout {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        anchors.leftMargin: 12 * scaleFactor
+                                        anchors.rightMargin: 12 * scaleFactor
+                                        anchors.bottomMargin: 10 * scaleFactor
+                                        spacing: 8 * scaleFactor
+
+                                        Button {
+                                            Layout.fillWidth: true
+                                            text: qsTr("全选")
+                                            enabled: !tcpController.armRunning
+                                            onClicked: window.setAllSlots(trayDelegate.selectionModel, true)
+                                        }
+                                        Button {
+                                            Layout.fillWidth: true
+                                            text: qsTr("取消")
+                                            enabled: !tcpController.armRunning
+                                            onClicked: window.setAllSlots(trayDelegate.selectionModel, false)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -728,7 +802,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredWidth: 360 * scaleFactor
                     Layout.minimumWidth: 0
-                    implicitHeight: 350 * scaleFactor
+                    implicitHeight: 400 * scaleFactor
                     radius: 12 * scaleFactor
                     color: "white"
                     border.color: window.borderColor
@@ -814,8 +888,29 @@ ApplicationWindow {
 
 
 
+
+
+
+
+
+
+
+
+                                    //选择槽位开始
                                     tcpController.toggleArmTask(window.selectedSlots(leftSelection),
                                                                 window.selectedSlots(rightSelection))
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

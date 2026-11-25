@@ -6,6 +6,7 @@
 
 #include "tcpcontroller.h"
 #include "lasercalibrationcontroller.h"
+#include "audiofeedback.h"
 
 int main(int argc, char *argv[])
 {
@@ -19,6 +20,8 @@ int main(int argc, char *argv[])
 
     TcpController controller;      
     LaserCalibrationController laserController;
+    QObject::connect(&controller, &TcpController::slamResultRecorded,
+                     &laserController, &LaserCalibrationController::saveSlamResult);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("tcpController", &controller);   //把控制器交给QML
@@ -27,6 +30,8 @@ int main(int argc, char *argv[])
 
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    AudioFeedback::play(AudioFeedback::Cue::AppStart);
 
     return app.exec();
 }

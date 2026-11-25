@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt5 5.14 REQUIRED COMPONENTS Quick Qml Network Mqtt Sql Concurrent)
+find_package(Qt5 5.14 REQUIRED COMPONENTS Quick Qml Network Mqtt Sql Concurrent Multimedia)
 
 set(OPENCV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/opencv-3.4.5")
 
@@ -15,6 +15,8 @@ qt5_add_resources(QT_RESOURCES qml/qml.qrc)
 
 add_executable(simple_qt
     src/main.cpp
+    src/audiofeedback.cpp
+    src/audiofeedback.h
     src/tcpcontroller.cpp
     src/tcpcontroller.h
     src/laservisionprocessor.cpp
@@ -31,6 +33,7 @@ target_link_libraries(simple_qt PRIVATE
     Qt5::Mqtt
     Qt5::Sql
     Qt5::Concurrent
+    Qt5::Multimedia
     "${OPENCV_ROOT}/x64/mingw/lib/libopencv_core345.dll.a"
     "${OPENCV_ROOT}/x64/mingw/lib/libopencv_imgproc345.dll.a"
     "${OPENCV_ROOT}/x64/mingw/lib/libopencv_videoio345.dll.a"

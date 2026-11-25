@@ -1,4 +1,5 @@
 #include "lasercalibrationcontroller.h"
+#include "audiofeedback.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -8,6 +9,7 @@
 #include <QJsonObject>
 #include <QNetworkInterface>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -64,6 +66,32 @@ QString csvCell(QString value)
     value.replace('"', QStringLiteral("\"\""));
     return QStringLiteral("\"%1\"").arg(value);
 }
+
+// 解析 TcpController 写出的标准 CSV 行，兼容字段内的逗号和双引号。
+QStringList parseCsvLine(const QString &line)
+{
+    QStringList fields;
+    QString field;
+    bool quoted = false;
+    for (int i = 0; i < line.size(); ++i) {
+        const QChar ch = line.at(i);
+        if (ch == QLatin1Char('"')) {
+            if (quoted && i + 1 < line.size() && line.at(i + 1) == QLatin1Char('"')) {
+                field.append(QLatin1Char('"'));
+                ++i;
+            } else {
+                quoted = !quoted;
+            }
+        } else if (ch == QLatin1Char(',') && !quoted) {
+            fields.append(field);
+            field.clear();
+        } else {
+            field.append(ch);
+        }
+    }
+    fields.append(field);
+    return fields;
+}
 }
 
 LaserCalibrationController::LaserCalibrationController(QObject *parent)
@@ -71,6 +99,14 @@ LaserCalibrationController::LaserCalibrationController(QObject *parent)
     , m_databaseConnectionName(QStringLiteral("laser-calibration-%1")
                                    .arg(reinterpret_cast<quintptr>(this)))
 {
+    QSettings settings;
+    const QString savedArmHost = settings.value(QStringLiteral("arm/host")).toString().trimmed();
+    const int savedArmPort = settings.value(QStringLiteral("arm/port"), m_armPort).toInt();
+    if (!savedArmHost.isEmpty())
+        m_armHost = savedArmHost;
+    if (savedArmPort > 0 && savedArmPort <= 65535)
+        m_armPort = savedArmPort;
+
     configureSockets();
     configureTimers();
 
@@ -105,6 +141,8 @@ LaserCalibrationController::~LaserCalibrationController()
 }
 
 bool LaserCalibrationController::armConnected() const { return m_armReady; }
+QString LaserCalibrationController::armHost() const { return m_armHost; }
+int LaserCalibrationController::armPort() const { return m_armPort; }
 bool LaserCalibrationController::receiverConnected() const
 { return m_receiverSocket.state() == QAbstractSocket::ConnectedState; }
 bool LaserCalibrationController::wifiConnected() const { return m_wifiConnected; }
@@ -196,7 +234,8 @@ void LaserCalibrationController::configureSockets()
             this, [this](QAbstractSocket::SocketError) {
         appendLog(QStringLiteral("机械臂 TCP 错误: %1").arg(m_armSocket.errorString()));
         if (!m_running)
-            setError(QStringLiteral("连接机械臂失败: %1").arg(m_armSocket.errorString()));
+            setError(QStringLiteral("连接机械臂 %1:%2 失败: %3")
+                         .arg(m_armHost).arg(m_armPort).arg(m_armSocket.errorString()));
     });
 
     connect(&m_receiverSocket, &QTcpSocket::connected, this, [this] {
@@ -266,7 +305,8 @@ void LaserCalibrationController::configureSockets()
             });
             return;
         }
-        if (m_running && m_state != State::WaitingPutback
+        if (m_running && m_state != State::WaitingReturnHome
+            && m_state != State::WaitingPutback
             && m_state != State::Aborting && !m_shutdown) {
             failCurrentSlot(QStringLiteral("接收机连接中断"));
         }
@@ -380,8 +420,16 @@ void LaserCalibrationController::connectArm(const QString &host, int port)
     m_shutdown = false;
     m_errorText.clear();
     emit errorChanged();
-    m_armHost = host.trimmed().isEmpty() ? QStringLiteral("192.168.5.1") : host.trimmed();
-    m_armPort = port > 0 && port <= 65535 ? port : 6601;
+    const QString requestedHost = host.trimmed().isEmpty() ? m_armHost : host.trimmed();
+    const int requestedPort = port > 0 && port <= 65535 ? port : m_armPort;
+    if (m_armHost != requestedHost || m_armPort != requestedPort) {
+        m_armHost = requestedHost;
+        m_armPort = requestedPort;
+        emit armEndpointChanged();
+    }
+    QSettings settings;
+    settings.setValue(QStringLiteral("arm/host"), m_armHost);
+    settings.setValue(QStringLiteral("arm/port"), m_armPort);
     m_armReady = false;
     emit armConnectedChanged();
     m_armBuffer.clear();
@@ -419,18 +467,19 @@ bool LaserCalibrationController::startCalibration(const QVariantList &leftSlots,
         return false;
     }
     QString reason;
-    if (!validateMeasurements(measurements, &reason)) {//检查水平线高
+    if (!validateMeasurements(measurements, &reason)) {   //检查水平线高
         setError(reason);
         return false;
     }
 
     m_slots.clear();
-    auto appendSlots = [this](const QString &tray, const QVariantList &values) {
+    const int maximumSlot = m_deviceModel == QStringLiteral("SLAM") ? 8 : 10;
+    auto appendSlots = [this, maximumSlot](const QString &tray, const QVariantList &values) {
         for (const QVariant &value : values) {
             const int slot = value.toInt();
-            // 激光标定托盘固定为 2×5；即便由 QML 以外的调用方启动，
-            // 也不能把超出 1~10 的槽位下发给机械臂。
-            if (slot >= 1 && slot <= 10)
+            // GRR激光托盘为2×5，SLAM激光托盘为2×4。后端再次限制范围，
+            // 防止QML以外的调用方把SLAM的9、10号槽位下发给机械臂。
+            if (slot >= 1 && slot <= maximumSlot)
                 m_slots.append(Slot{tray, slot, QStringLiteral("pending")});
         }
     };
@@ -516,6 +565,7 @@ void LaserCalibrationController::resetReceiverCalibration()
     }
     sendReceiver("set laser reset calibration\r\n");
     appendLog(QStringLiteral("已发送激光外参复位指令"));
+    AudioFeedback::play(AudioFeedback::Cue::Reset);
 }
 
 QString LaserCalibrationController::slotStatus(const QString &tray, int slot) const
@@ -687,6 +737,7 @@ void LaserCalibrationController::processArmFrame(const QString &frame)
         if (!m_armReady) {
             m_armReady = true;
             emit armConnectedChanged();
+            AudioFeedback::play(AudioFeedback::Cue::ConnectArm);
         }
         if (!m_running)
             setState(State::Idle, QStringLiteral("机械臂已就绪，可选择槽位开始标定"));
@@ -786,6 +837,18 @@ void LaserCalibrationController::handleArmOk()
     case State::WaitingPoint7:
         m_stepTimer.stop();
         requestPlanarCalibration(6);
+        break;
+    case State::WaitingReturnHome:
+        m_stepTimer.stop();
+        // 与 wifiTcp_test3 一致：NEXT8 的 OK 只表示机械臂已经从最后一个
+        // 标定姿态安全回到 P41/Home。此时才能执行托盘放回动作。
+        if (!sendArm("$$MT,SUCCESS\r\n")) {
+            failCurrentSlot(QStringLiteral("机械臂已回 Home，但发送放回指令失败"));
+            break;
+        }
+        setState(State::WaitingPutback,
+                 QStringLiteral("机械臂已回 Home，等待安全放回设备"),
+                 kArmMoveTimeoutMs);
         break;
     case State::WaitingPutback:
         if (m_currentResultRecorded) {
@@ -1117,14 +1180,30 @@ void LaserCalibrationController::handleLaserBack(const LaserBack &report)
         }
         appendLog(QStringLiteral("角度标定结果已按旧上位机流程连续写回设备两次"));
 
-        // NEXT1 负责夹取，NEXT2～NEXT7 对应后续姿态。角度校准完成后
-        // 不再增加额外标定点编号，直接通知机械臂执行“回 Home + 安全放回”。
+        // GRR13/17/20 严格保持 wifiTcp_test3 的安全路径：先发 NEXT8 回
+        // P41/Home，收到到位 OK 后才发 SUCCESS。若 GRR17 在最后姿态直接
+        // 收到 SUCCESS，会直奔托盘上方，可能向左绕行并撞到围挡。
+        // SLAM_GRR 不支持 NEXT8；它收到 SUCCESS 后会在机械臂程序内部先
+        // moveHome() 再放回，所以必须继续使用其原有协议。
         ensureReceiverSafe(); //关闭激光
         m_pendingSuccess = true;
         m_pendingReason.clear();
-        sendArm("$$MT,SUCCESS\r\n");//通知机械臂放回设备
-        setState(State::WaitingPutback,
-                 QStringLiteral("标定成功，等待机械臂安全放回设备"),
+        if (m_deviceModel == QStringLiteral("SLAM")) {
+            if (!sendArm("$$MT,SUCCESS\r\n")) {
+                failCurrentSlot(QStringLiteral("发送机械臂放回指令失败"));
+                return;
+            }
+            setState(State::WaitingPutback,
+                     QStringLiteral("标定成功，等待机械臂安全放回设备"),
+                     kArmMoveTimeoutMs);
+            return;
+        }
+        if (!sendArm("$$MT,NEXT8\r\n")) {
+            failCurrentSlot(QStringLiteral("发送机械臂回 Home 指令 NEXT8 失败"));
+            return;
+        }
+        setState(State::WaitingReturnHome,
+                 QStringLiteral("标定成功，等待机械臂回到 Home 点"),
                  kArmMoveTimeoutMs);
         return;
     }
@@ -1222,6 +1301,10 @@ bool LaserCalibrationController::validateMeasurements(const QVariantMap &measure
     if (m_deviceModel == QStringLiteral("GRR13")) {
         m_horizontalLineHeight = 721.0;
         m_verticalLineHeight = 507.0;
+    } else if (m_deviceModel == QStringLiteral("SLAM")) {
+        // SLAM 设备使用其专用托盘和激光安装方向，对应固定近点如下。
+        m_horizontalLineHeight = 680.0;
+        m_verticalLineHeight = 436.0;
     } else if (m_deviceModel == QStringLiteral("GRR17")) {
         m_horizontalLineHeight = 770.0;
         m_verticalLineHeight = 490.0;
@@ -1230,7 +1313,7 @@ bool LaserCalibrationController::validateMeasurements(const QVariantMap &measure
         m_verticalLineHeight = 511.0;
     } else {
         if (reason)
-            *reason = QStringLiteral("请选择有效的机械臂型号：GRR13、GRR17 或 GRR20");
+            *reason = QStringLiteral("请选择有效的设备类型/型号：GRR13、GRR17、GRR20 或 SLAM");
         return false;
     }
     return true;
@@ -1239,10 +1322,22 @@ bool LaserCalibrationController::validateMeasurements(const QVariantMap &measure
 void LaserCalibrationController::beginNextSlot()
 {
     continueIfNotPaused([this] {    //是否暂停
+        const int previousIndex = m_currentIndex;
         ++m_currentIndex;
         if (m_currentIndex >= m_slots.size()) {
+            if (previousIndex >= 0 && previousIndex < m_slots.size()) {
+                AudioFeedback::play(m_slots.at(previousIndex).tray == QStringLiteral("left")
+                                        ? AudioFeedback::Cue::LeftTrayReady
+                                        : AudioFeedback::Cue::RightTrayReady);
+            }
             finishBatch();
             return;
+        }
+        if (previousIndex >= 0 && previousIndex < m_slots.size()
+            && m_slots.at(previousIndex).tray == QStringLiteral("left")
+            && m_slots.at(m_currentIndex).tray == QStringLiteral("right")) {
+            AudioFeedback::play(AudioFeedback::Cue::LeftTrayReady);
+            AudioFeedback::play(AudioFeedback::Cue::ChangeTray);
         }
         beginCurrentSlot();
     });
@@ -1539,8 +1634,10 @@ void LaserCalibrationController::handleVisionMeasurement(
 
     // wifiTcp_test3 按换算后的毫米高度补偿。GRR13 不补偿；
     // GRR17/GRR20 仅在绝对高度超过 10 mm 时向零点方向补偿 10 mm。
+    // SLAM 使用自己的固定近点，且当前不套用 GRR17/GRR20 的视觉补偿。
     const double rawHeight = height;
-    if (m_deviceModel != QStringLiteral("GRR13")) {
+    if (m_deviceModel == QStringLiteral("GRR17")
+        || m_deviceModel == QStringLiteral("GRR20")) {
         if (height > 10.0)
             height -= 10.0;
         else if (height < -10.0)
@@ -1734,6 +1831,7 @@ void LaserCalibrationController::failCurrentSlot(const QString &reason)
         completeCurrentSlot(false, m_pendingReason.isEmpty() ? reason : m_pendingReason);
         return;
     }
+    AudioFeedback::playFailure(reason);
     setError(reason);
     m_visionTarget = VisionTarget::None;
     m_vision.cancelPendingResult();
@@ -1771,6 +1869,7 @@ void LaserCalibrationController::finishBatch()
                                 .arg(successCount()).arg(failureCount());
     setProgress(summary);
     appendLog(summary);
+    AudioFeedback::play(AudioFeedback::Cue::AllFinished);
 }
 
 void LaserCalibrationController::ensureReceiverSafe()
@@ -1884,14 +1983,134 @@ bool LaserCalibrationController::initializeDatabase()
         return false;
     }
     QSqlQuery query(m_database);
-    const bool ok = query.exec(QStringLiteral(
+    const bool laserTableOk = query.exec(QStringLiteral(
         "CREATE TABLE IF NOT EXISTS laser_results ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, tray TEXT, slot INTEGER,"
         "sn TEXT, hardware TEXT, version TEXT, distance REAL, height REAL,"
         "pitch REAL, yaw REAL, success INTEGER, error TEXT, bias TEXT)"));
-    if (!ok)
+    if (!laserTableOk) {
         appendLog(QStringLiteral("创建激光标定结果表失败: %1").arg(query.lastError().text()));
-    return ok;
+        return false;
+    }
+
+    const bool slamTableOk = query.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS slam_results ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, tray TEXT, slot INTEGER,"
+        "sn TEXT, hardware TEXT, version TEXT, result TEXT, data_path TEXT, error TEXT,"
+        "UNIQUE(time,tray,slot,sn,result,data_path,error))"));
+    if (!slamTableOk) {
+        appendLog(QStringLiteral("创建 SLAM 标定结果表失败: %1").arg(query.lastError().text()));
+        return false;
+    }
+
+    if (!query.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY,value TEXT)"))) {
+        appendLog(QStringLiteral("创建数据库迁移标记表失败: %1").arg(query.lastError().text()));
+        return false;
+    }
+
+    importLegacySlamResults();
+    return true;
+}
+
+void LaserCalibrationController::importLegacySlamResults()
+{
+    QSqlQuery migrationQuery(m_database);
+    migrationQuery.prepare(QStringLiteral(
+        "SELECT value FROM app_meta WHERE key='slam_csv_import_v1'"));
+    if (migrationQuery.exec() && migrationQuery.next())
+        return;
+
+    // 兼容开发阶段已完成导入但尚未写迁移标记的数据库。
+    QSqlQuery existingQuery(m_database);
+    if (existingQuery.exec(QStringLiteral("SELECT COUNT(*) FROM slam_results"))
+        && existingQuery.next() && existingQuery.value(0).toInt() > 0) {
+        QSqlQuery markQuery(m_database);
+        markQuery.exec(QStringLiteral(
+            "INSERT OR REPLACE INTO app_meta(key,value) "
+            "VALUES('slam_csv_import_v1','completed')"));
+        return;
+    }
+
+    const QString csvPath = QDir(
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                                .filePath(QStringLiteral("SLAM_calibration/results.csv"));
+    QFile file(csvPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return;
+
+    QTextStream stream(&file);
+    stream.setCodec("UTF-8");
+    bool firstLine = true;
+    int imported = 0;
+    while (!stream.atEnd()) {
+        QString line = stream.readLine();
+        if (firstLine) {
+            firstLine = false;
+            line.remove(QChar(0xFEFF));
+            if (line.startsWith(QStringLiteral("time,"), Qt::CaseInsensitive))
+                continue;
+        }
+        if (line.trimmed().isEmpty())
+            continue;
+        const QStringList fields = parseCsvLine(line);
+        if (fields.size() < 9)
+            continue;
+        QVariantMap row;
+        row.insert(QStringLiteral("time"), fields.at(0));
+        row.insert(QStringLiteral("tray"), fields.at(1));
+        row.insert(QStringLiteral("slot"), fields.at(2).toInt());
+        row.insert(QStringLiteral("sn"), fields.at(3));
+        row.insert(QStringLiteral("hardware"), fields.at(4));
+        row.insert(QStringLiteral("version"), fields.at(5));
+        row.insert(QStringLiteral("result"), fields.at(6));
+        row.insert(QStringLiteral("dataPath"), fields.at(7));
+        row.insert(QStringLiteral("error"), fields.mid(8).join(QStringLiteral(",")));
+
+        QSqlQuery query(m_database);
+        query.prepare(QStringLiteral(
+            "INSERT OR IGNORE INTO slam_results(time,tray,slot,sn,hardware,version,"
+            "result,data_path,error) VALUES(?,?,?,?,?,?,?,?,?)"));
+        query.addBindValue(row.value(QStringLiteral("time")));
+        query.addBindValue(row.value(QStringLiteral("tray")));
+        query.addBindValue(row.value(QStringLiteral("slot")));
+        query.addBindValue(row.value(QStringLiteral("sn")));
+        query.addBindValue(row.value(QStringLiteral("hardware")));
+        query.addBindValue(row.value(QStringLiteral("version")));
+        query.addBindValue(row.value(QStringLiteral("result")));
+        query.addBindValue(row.value(QStringLiteral("dataPath")));
+        query.addBindValue(row.value(QStringLiteral("error")));
+        if (query.exec() && query.numRowsAffected() > 0)
+            ++imported;
+    }
+    if (imported > 0)
+        appendLog(QStringLiteral("已导入 %1 条 SLAM 历史标定记录").arg(imported));
+
+    QSqlQuery markQuery(m_database);
+    markQuery.exec(QStringLiteral(
+        "INSERT OR REPLACE INTO app_meta(key,value) "
+        "VALUES('slam_csv_import_v1','completed')"));
+}
+
+void LaserCalibrationController::saveSlamResult(const QVariantMap &row)
+{
+    if (!m_database.isOpen())
+        return;
+    QSqlQuery query(m_database);
+    query.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO slam_results(time,tray,slot,sn,hardware,version,"
+        "result,data_path,error) VALUES(?,?,?,?,?,?,?,?,?)"));
+    query.addBindValue(row.value(QStringLiteral("time")));
+    query.addBindValue(row.value(QStringLiteral("tray")));
+    query.addBindValue(row.value(QStringLiteral("slot")));
+    query.addBindValue(row.value(QStringLiteral("sn")));
+    query.addBindValue(row.value(QStringLiteral("hardware")));
+    query.addBindValue(row.value(QStringLiteral("version")));
+    query.addBindValue(row.value(QStringLiteral("result")));
+    query.addBindValue(row.value(QStringLiteral("dataPath")));
+    query.addBindValue(row.value(QStringLiteral("error")));
+    if (!query.exec())
+        appendLog(QStringLiteral("保存 SLAM 标定数据库失败: %1").arg(query.lastError().text()));
 }
 
 void LaserCalibrationController::saveResultToDatabase(const QVariantMap &row)
@@ -1984,16 +2203,19 @@ QVariantList LaserCalibrationController::queryResults(const QString &sn) const
 
     QSqlQuery query(m_database);
     const QString normalizedSn = sn.trimmed();
-    if (normalizedSn.isEmpty()) {
-        query.prepare(QStringLiteral(
-            "SELECT id,time,tray,slot,sn,hardware,version,distance,height,pitch,yaw,"
-            "success,error,bias FROM laser_results ORDER BY id DESC"));
-    } else {
-        query.prepare(QStringLiteral(
-            "SELECT id,time,tray,slot,sn,hardware,version,distance,height,pitch,yaw,"
-            "success,error,bias FROM laser_results WHERE sn LIKE ? ORDER BY id DESC"));
-        query.addBindValue(QStringLiteral("%") + normalizedSn + QStringLiteral("%"));
-    }
+    query.prepare(QStringLiteral(
+        "SELECT id,time,record_type,tray,slot,sn,hardware,version,distance,height,"
+        "pitch,yaw,success,error,bias,data_path FROM ("
+        "SELECT id,time,'laser' AS record_type,tray,slot,sn,hardware,version,"
+        "distance,height,pitch,yaw,success,error,bias,'' AS data_path FROM laser_results "
+        "UNION ALL "
+        "SELECT id,time,'slam' AS record_type,tray,slot,sn,hardware,version,"
+        "NULL AS distance,NULL AS height,NULL AS pitch,NULL AS yaw,"
+        "CASE WHEN lower(result)='success' THEN 1 ELSE 0 END AS success,"
+        "error,'[]' AS bias,data_path FROM slam_results) "
+        "WHERE (? = '' OR sn LIKE ?) ORDER BY time DESC,id DESC"));
+    query.addBindValue(normalizedSn);
+    query.addBindValue(QStringLiteral("%") + normalizedSn + QStringLiteral("%"));
     if (!query.exec())
         return rows;
 
@@ -2001,30 +2223,33 @@ QVariantList LaserCalibrationController::queryResults(const QString &sn) const
         QVariantMap row;
         row.insert(QStringLiteral("id"), query.value(0));
         row.insert(QStringLiteral("time"), query.value(1));
-        const QString tray = query.value(2).toString();
+        const QString recordType = query.value(2).toString();
+        row.insert(QStringLiteral("mode"), recordType);
+        const QString tray = query.value(3).toString();
         row.insert(QStringLiteral("tray"), tray);
         row.insert(QStringLiteral("trayText"),
                    tray == QStringLiteral("left") ? QStringLiteral("左")
-                                                    : QStringLiteral("右"));
-        row.insert(QStringLiteral("slot"), query.value(3));
-        row.insert(QStringLiteral("sn"), query.value(4));
-        row.insert(QStringLiteral("hardware"), query.value(5));
-        row.insert(QStringLiteral("version"), query.value(6));
-        row.insert(QStringLiteral("distance"), query.value(7));
-        row.insert(QStringLiteral("height"), query.value(8));
-        row.insert(QStringLiteral("pitch"), query.value(9));
-        row.insert(QStringLiteral("yaw"), query.value(10));
-        row.insert(QStringLiteral("success"), query.value(11).toInt() != 0);
-        row.insert(QStringLiteral("result"), query.value(11).toInt() != 0
+                       : (tray == QStringLiteral("right") ? QStringLiteral("右") : tray));
+        row.insert(QStringLiteral("slot"), query.value(4));
+        row.insert(QStringLiteral("sn"), query.value(5));
+        row.insert(QStringLiteral("hardware"), query.value(6));
+        row.insert(QStringLiteral("version"), query.value(7));
+        row.insert(QStringLiteral("distance"), query.value(8));
+        row.insert(QStringLiteral("height"), query.value(9));
+        row.insert(QStringLiteral("pitch"), query.value(10));
+        row.insert(QStringLiteral("yaw"), query.value(11));
+        row.insert(QStringLiteral("success"), query.value(12).toInt() != 0);
+        row.insert(QStringLiteral("result"), query.value(12).toInt() != 0
                        ? QStringLiteral("成功") : QStringLiteral("失败"));
-        row.insert(QStringLiteral("error"), query.value(12));
-        row.insert(QStringLiteral("bias"), query.value(13));
+        row.insert(QStringLiteral("error"), query.value(13));
+        row.insert(QStringLiteral("bias"), query.value(14));
+        row.insert(QStringLiteral("dataPath"), query.value(15));
         rows.append(row);
     }
     return rows;
 }
 
-QString LaserCalibrationController::normalizeSn(const QString &value)
+QString LaserCalibrationController::normalizeSn(const QString &value) const
 {
     QString candidate = value.trimmed();
     candidate.remove(QStringLiteral("$*"));
@@ -2032,7 +2257,20 @@ QString LaserCalibrationController::normalizeSn(const QString &value)
     candidate.remove('\n');
     if (candidate.startsWith(QStringLiteral("SNFF"), Qt::CaseInsensitive))
         candidate = candidate.mid(4);
-    // GRR 扫码报文为 SNFF + 9 位 SN；完整匹配可避免半包和日志文字被当成设备号。
+
+    // SLAM 条码可能是 SNL88L00017，而设备热点是 LS200-L88L00017。
+    // SLAM 模式下统一保存/匹配热点实际使用的 9 位 L88L00017。
+    if (m_deviceModel == QStringLiteral("SLAM")) {
+        static const QRegularExpression fullSlamToken(
+            QStringLiteral("^SN([A-Za-z0-9_-]{9})$"),
+            QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch fullMatch = fullSlamToken.match(candidate);
+        if (fullMatch.hasMatch())
+            candidate = fullMatch.captured(1);
+    }
+
+    // GRR 扫码报文为 SNFF + 9 位 SN；SLAM 已在上面去掉条码中的 SN 前缀。
+    // 完整匹配可避免半包和日志文字被当成设备号。
     static const QRegularExpression token(QStringLiteral("^([A-Za-z0-9_-]{9})$"));
     const QRegularExpressionMatch match = token.match(candidate);
     if (!match.hasMatch())

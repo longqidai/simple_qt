@@ -15,6 +15,7 @@ ScrollView {
     property color borderColor: "#dfe5ee"
     property bool modeSwitchLocked: false
     property int selectionRevision: 0
+    property int selectableSlotCount: 10
     property bool taskWasRunning: false
     signal switchToSlamRequested()
 
@@ -86,16 +87,16 @@ ScrollView {
     function selectedCount() {
         var revision = selectionRevision
         var count = 0
-        for (var i = 0; i < leftModel.count; ++i)
+        for (var i = 0; i < Math.min(leftModel.count, selectableSlotCount); ++i)
             if (leftModel.get(i).selected) ++count
-        for (var j = 0; j < rightModel.count; ++j)
+        for (var j = 0; j < Math.min(rightModel.count, selectableSlotCount); ++j)
             if (rightModel.get(j).selected) ++count
         return count + revision * 0
     }
 
     function selectedSlots(model) {
         var values = []
-        for (var i = 0; i < model.count; ++i)
+        for (var i = 0; i < Math.min(model.count, selectableSlotCount); ++i)
             if (model.get(i).selected) values.push(i + 1)
         return values
     }
@@ -103,7 +104,17 @@ ScrollView {
     function setAll(model, selected) {
         if (controller && controller.running) return
         for (var i = 0; i < model.count; ++i)
-            model.setProperty(i, "selected", selected)
+            model.setProperty(i, "selected", selected && i < selectableSlotCount)
+        ++selectionRevision
+    }
+
+    function updateSlotLimit(deviceModel) {
+        selectableSlotCount = deviceModel === "SLAM" ? 8 : 10
+        // 从GRR切换到SLAM时，立即清除隐藏的9、10号选择，防止越界下发。
+        for (var i = selectableSlotCount; i < leftModel.count; ++i) {
+            leftModel.setProperty(i, "selected", false)
+            rightModel.setProperty(i, "selected", false)
+        }
         ++selectionRevision
     }
 
@@ -127,6 +138,30 @@ ScrollView {
         return selected ? primaryColor : "#cbd5e1"
     }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     function startTask() {        // 开始标定
         if (!controller) return
         controller.startCalibration(
@@ -134,6 +169,24 @@ ScrollView {
                 "deviceModel": robotModel.currentText
             })
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     ColumnLayout {
         x: 20
@@ -207,8 +260,8 @@ ScrollView {
                     RowLayout {
                         Layout.fillWidth: true
                         Label { text: qsTr("机械臂"); color: page.textColor; font.pixelSize: 13 }
-                        TextField { id: armHost; Layout.fillWidth: true; text: "192.168.5.1"; enabled: !controller || !controller.running }
-                        TextField { id: armPort; Layout.preferredWidth: 90; text: "6601"; inputMethodHints: Qt.ImhDigitsOnly; enabled: !controller || !controller.running }
+                        TextField { id: armHost; Layout.fillWidth: true; text: controller ? controller.armHost : "192.168.5.1"; enabled: !controller || !controller.running }
+                        TextField { id: armPort; Layout.preferredWidth: 90; text: controller ? controller.armPort.toString() : "6601"; inputMethodHints: Qt.ImhDigitsOnly; enabled: !controller || !controller.running }
                         Button {
                             Layout.preferredWidth: 126
                             text: controller && controller.armConnected ? qsTr("断开连接") : qsTr("连接机械臂")
@@ -217,10 +270,46 @@ ScrollView {
                                 if (controller.armConnected) controller.disconnectArm()
 
 
-                               
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                //连接机械臂
                                 else controller.connectArm(armHost.text, parseInt(armPort.text))
                             
-                            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                             }
                         }
                     }
@@ -306,16 +395,22 @@ ScrollView {
                         ComboBox {
                             id: robotModel
                             Layout.fillWidth: true
-                            model: ["GRR13", "GRR17", "GRR20"]
+                            // SLAM 单激光标定与 GRR 共用当前页面和标定状态机；
+                            // 后续组合标定可在同一参数入口继续扩展，不需要复制页面。
+                            model: ["GRR13", "GRR17", "GRR20", "SLAM"]
                             currentIndex: 2
                             enabled: controller && !controller.running
+                             onCurrentTextChanged: page.updateSlotLimit(currentText)
                         }
                         Label { text: qsTr("固定近点"); color: page.secondaryTextColor; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
                         Label {
                             Layout.fillWidth: true
                             horizontalAlignment: Text.AlignHCenter
                             color: page.textColor
-                            text: robotModel.currentText === "GRR13" ? qsTr("水平 721 / 垂直 507 mm")
+                            text: robotModel.currentText === "GRR13"
+                                  ? qsTr("水平 721 / 垂直 507 mm")
+                                  : robotModel.currentText === "SLAM"
+                                  ? qsTr("水平 680 / 垂直 436 mm")
                                   : robotModel.currentText === "GRR17" ? qsTr("水平 770 / 垂直 490 mm")
                                   : qsTr("水平 615 / 垂直 511 mm")
                         }
@@ -354,7 +449,7 @@ ScrollView {
                     RowLayout {
                         Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10
                         Repeater {
-                            model: [ {"title": qsTr("左托盘  2×5"), "tray": "left", "selection": leftModel}, {"title": qsTr("右托盘  2×5"), "tray": "right", "selection": rightModel} ]
+                            model: [ {"tray": "left", "selection": leftModel}, {"tray": "right", "selection": rightModel} ]
                             Rectangle {
                                 id: trayCard
                                 property string trayKey: modelData.tray
@@ -362,20 +457,30 @@ ScrollView {
                                 Layout.fillWidth: true; Layout.fillHeight: true; radius: 8; color: "#f8fafc"; border.color: page.borderColor
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
-                                    Label { Layout.alignment: Qt.AlignHCenter; text: modelData.title; color: page.textColor; font.bold: true }
+                                    Label {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: (trayCard.trayKey === "left" ? qsTr("左托盘  ") : qsTr("右托盘  "))
+                                              + (page.selectableSlotCount === 8 ? qsTr("2×4") : qsTr("2×5"))
+                                        color: page.textColor
+                                        font.bold: true
+                                    }
                                     Grid {
-                                        Layout.alignment: Qt.AlignHCenter; Layout.fillHeight: true; columns: 2; rows: 5; spacing: 8
+                                        Layout.alignment: Qt.AlignHCenter; Layout.fillHeight: true; columns: 2; rows: page.selectableSlotCount / 2; spacing: 8
                                         Repeater {
-                                            model: trayCard.selectionModel
+                                            model: page.selectableSlotCount
                                             Rectangle {
+                                                property bool slotSelected: {
+                                                    var revision = page.selectionRevision
+                                                    return trayCard.selectionModel.get(index).selected && revision * 0 === 0
+                                                }
                                                 width: 48; height: 48; radius: 7
-                                                color: page.statusColor(trayCard.trayKey, index + 1, selected)
-                                                border.width: (selected || (controller && controller.slotStatus(trayCard.trayKey, index + 1) !== "idle")) ? 2 : 1
-                                                border.color: page.statusBorder(trayCard.trayKey, index + 1, selected)
-                                                Label { anchors.centerIn: parent; text: index + 1; color: parent.border.color; font.bold: selected }
+                                                color: page.statusColor(trayCard.trayKey, index + 1, slotSelected)
+                                                border.width: (slotSelected || (controller && controller.slotStatus(trayCard.trayKey, index + 1) !== "idle")) ? 2 : 1
+                                                border.color: page.statusBorder(trayCard.trayKey, index + 1, slotSelected)
+                                                Label { anchors.centerIn: parent; text: index + 1; color: parent.border.color; font.bold: parent.slotSelected }
                                                 MouseArea {
                                                     anchors.fill: parent; enabled: !controller || !controller.running; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                                    onClicked: { trayCard.selectionModel.setProperty(index, "selected", !selected); ++page.selectionRevision }
+                                                    onClicked: { trayCard.selectionModel.setProperty(index, "selected", !parent.slotSelected); ++page.selectionRevision }
                                                 }
                                             }
                                         }

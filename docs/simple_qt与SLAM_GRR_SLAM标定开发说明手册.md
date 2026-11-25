@@ -435,6 +435,7 @@ SLAM 标定对设备使用两种通信方式：设备信息查询走 `192.168.1.
 | `AC_STOP`（动作值 2） | MQTT `app_slam/request/modeling` | 停止真实扫描并保存扫描工程；状态 6 表示保存中，状态 7 表示保存完成 |
 | `AC_START` | MQTT `app_slam/request/data_collect`，JSON | 开始把原始传感器数据写入新的采集目录；成功响应包含 `desc=collecting` 和 `path` |
 | `AC_STOP` | MQTT `app_slam/request/data_collect`，JSON | 停止并封口原始数据目录；成功响应为 `desc=collect stopped` |
+| `AC_FINISH` | MQTT `app_slam/request/data_collect`，JSON | FTP 下载完成后结束本次采集会话并删除设备端采集目录；成功响应包含 `collect finished, dir removed` |
 
 上位机实际发送的两个 `data_collect` JSON 示例：
 
@@ -445,6 +446,12 @@ SLAM 标定对设备使用两种通信方式：设备信息查询走 `192.168.1.
 ```json
 {"action":"AC_STOP"}
 ```
+
+```json
+{"action":"AC_FINISH"}
+```
+
+正常顺序为 `AC_STOP → FTP 下载 → AC_FINISH`。下载失败、人工中止或其他异常收尾也会在停止采集后尽力发送 `AC_FINISH`，避免残留目录影响下一次 `AC_START`。
 
 设备响应和状态不是上位机指令，但它们决定流程能否继续：
 

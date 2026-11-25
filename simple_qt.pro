@@ -1,4 +1,4 @@
-QT += core gui quick qml network mqtt sql concurrent
+QT += core gui quick qml network mqtt sql concurrent multimedia
 
 CONFIG += c++17
 TEMPLATE = app
@@ -6,11 +6,13 @@ TARGET = simple_qt
 
 SOURCES += \
     src/main.cpp \
+    src/audiofeedback.cpp \
     src/tcpcontroller.cpp \
     src/laservisionprocessor.cpp \
     src/lasercalibrationcontroller.cpp
 
 HEADERS += \
+    src/audiofeedback.h \
     src/tcpcontroller.h \
     src/laservisionprocessor.h \
     src/lasercalibrationcontroller.h

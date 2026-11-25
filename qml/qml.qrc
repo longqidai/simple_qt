@@ -3,4 +3,17 @@
   <file>Main.qml</file>
   <file>LaserCalibrationPage.qml</file>
 </qresource>
+<qresource prefix="/audio">
+  <file alias="allEnd.wav">../audio/allEnd.wav</file>
+  <file alias="appStart.wav">../audio/appStart.wav</file>
+  <file alias="bindOvertime.wav">../audio/bindOvertime.wav</file>
+  <file alias="calResultOvertime.wav">../audio/calResultOvertime.wav</file>
+  <file alias="changePlat.wav">../audio/changePlat.wav</file>
+  <file alias="connectArm.wav">../audio/connectArm.wav</file>
+  <file alias="errCheck.wav">../audio/errCheck.wav</file>
+  <file alias="leftAllReady.wav">../audio/leftAllReady.wav</file>
+  <file alias="reset.wav">../audio/reset.wav</file>
+  <file alias="rightAllReady.wav">../audio/rightAllReady.wav</file>
+  <file alias="scanQRovertime.wav">../audio/scanQRovertime.wav</file>
+</qresource>
 </RCC>

@@ -17,7 +17,7 @@
 9. 机械臂上报 `$$MT,TRAJECTORYFINISH` 后，上位机立即发送 `data_collect AC_STOP` 封口原始数据目录，收到 `collect stopped` 后再发送 `ModelingRequest(AC_STOP)`，等待设备保存扫描工程。机械臂安全回程不再计入采集数据。
 10. 保存该设备的 SN、Wi-Fi 和采集目录，立即通知机械臂放回设备并处理下一槽位。
 11. 所有槽位测量、采集和放回完成后结束机械臂流程。
-12. 上位机按 SN 逐台重连设备 Wi-Fi，通过 FTP 统一下载全部采集数据。
+12. 上位机按 SN 逐台重连设备 Wi-Fi，通过 FTP 统一下载全部采集数据。每台下载完成后发送 `data_collect AC_FINISH`，收到 `collect finished, dir removed` 后才把该槽位记为成功并继续下一台。
 
 `modeling AC_START` 负责打开雷达、相机等扫描传感器并启动 SLAM；`data_collect AC_START` 只负责将原始数据写入标定采集目录。两者都需要，但只有 `modeling status=5` 且 `data_collect=collecting` 后才释放机械臂轨迹，避免长时间的传感器初始化数据被写入标定包。
 
@@ -32,7 +32,9 @@
 1. 保持当前设备和槽位，自动重连设备 Wi-Fi 与 MQTT。
 2. 重复发送 `ModelingRequest(AC_STOP)`，直到收到扫描状态 7/8/9 或设备明确回复扫描已停止。
 3. 重复发送 `data_collect AC_STOP`，直到设备明确回复 `collect stopped`、`not active` 或 `already stopped`。
-4. 两部分均确认停止后，才通知机械臂放回设备，并中止任务或继续下一槽位。
+4. 两部分均确认停止后，异常流程还会尽力发送 `data_collect AC_FINISH` 清理设备端采集目录，再通知机械臂放回设备并中止任务或继续下一槽位。
+
+统一下载失败或人工中止下载时也会发送 `AC_FINISH`，避免设备端残留采集目录；如果设备 Wi-Fi/MQTT 已完全断开，程序会记录“AC_FINISH 未确认”，继续安全收尾，并提示人工检查设备目录。
 
 例外：机械臂上报 `FAILED,MOTION` 表示到位无法确认。上位机会停止真实扫描和原始采集并中止批次，**不发送自动放回指令**；本次运行禁止再开始新批次。必须现场人工确认姿态、轨迹和夹持状态，完成机械臂恢复后重新启动机械臂程序和上位机。
 

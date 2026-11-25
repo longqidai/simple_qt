@@ -1,4 +1,5 @@
 #include "tcpcontroller.h"
+#include "audiofeedback.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -10,6 +11,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSettings>
 #include <QSet>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -17,6 +19,8 @@
 #include <QtMqtt/qmqttsubscription.h>
 #include <QtMqtt/qmqtttopicfilter.h>
 #include <QtMqtt/qmqtttopicname.h>
+
+#include <utility>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -43,6 +47,7 @@ const int kTaskTimeoutMs = 20000;
 const int kPreinitTimeoutMs = 60000;
 const int kModelingStartTimeoutMs = 120000;
 const int kCollectTimeoutMs = 20000;
+const int kCollectFinishTimeoutMs = 15000;
 const int kCollectRecoveryMaxAttempts = 3;
 const int kCollectRecoverySettleMs = 5000;
 const int kArmHomeTimeoutMs = 120000;
@@ -326,6 +331,17 @@ TcpController::TcpController(QObject *parent)
     , m_ftpTotalFiles(0)
     , m_ftpDownloadedFiles(0)
 {
+    // Keep the last real robot/DobotStudio endpoint. A remote controller is
+    // normally reached through the other computer's LAN address, not through
+    // this computer's default 192.168.5.1 route.
+    QSettings settings;
+    const QString savedArmHost = settings.value(QStringLiteral("arm/host")).toString().trimmed();
+    const int savedArmPort = settings.value(QStringLiteral("arm/port"), m_port).toInt();
+    if (!savedArmHost.isEmpty())
+        m_host = savedArmHost;
+    if (savedArmPort > 0 && savedArmPort <= 65535)
+        m_port = savedArmPort;
+
     for (int i = 0; i < kSlamSlotCount; ++i) {
         m_leftSlotStates.append(QStringLiteral("idle"));
         m_rightSlotStates.append(QStringLiteral("idle"));
@@ -467,6 +483,12 @@ TcpController::TcpController(QObject *parent)
                         failCurrentSlot(QStringLiteral("兼容模式下无法创建扫描工程"));
                 });
             });
+        } else if (m_taskActive && m_flowState == FlowState::FinishingCollection) {
+            // Batch download may finish while the MQTT connection that was
+            // opened in parallel with FTP is still being established. Resume
+            // AC_FINISH as soon as the connection and subscriptions are ready.
+            appendLog(QStringLiteral("MQTT 已就绪，继续发送 AC_FINISH"));
+            scheduleWorkflowAction(0, [this]() { resumeMqttOperation(); });
         } else if (reconnected && m_taskActive) {
             appendLog(QStringLiteral("MQTT 已自动恢复，继续当前流程"));
             scheduleWorkflowAction(300, [this]() { resumeMqttOperation(); });
@@ -596,9 +618,11 @@ QString TcpController::lastError() const { return m_lastError; }
 
 void TcpController::setHost(const QString &host)
 {
-    if (m_host == host)
+    const QString normalized = host.trimmed();
+    if (normalized.isEmpty() || m_host == normalized)
         return;
-    m_host = host;
+    m_host = normalized;
+    QSettings().setValue(QStringLiteral("arm/host"), m_host);
     emit hostChanged();
 }
 
@@ -606,7 +630,10 @@ void TcpController::setPort(int port)
 {
     if (m_port == port)
         return;
+    if (port <= 0 || port > 65535)
+        return;
     m_port = port;
+    QSettings().setValue(QStringLiteral("arm/port"), m_port);
     emit portChanged();
 }
 
@@ -758,7 +785,8 @@ void TcpController::onArmDisconnected()
 void TcpController::onArmError(QAbstractSocket::SocketError socketError)
 {
     Q_UNUSED(socketError)
-    m_statusText = QStringLiteral("连接失败: %1").arg(m_armSocket->errorString());
+    m_statusText = QStringLiteral("连接 %1:%2 失败: %3")
+                       .arg(m_host).arg(m_port).arg(m_armSocket->errorString());
     emit statusTextChanged();
     appendLog(m_statusText);
     if (!m_connected) {
@@ -866,6 +894,7 @@ void TcpController::handleArmCommand(const QString &command)
         if (!m_armReady) {
             m_armReady = true;
             emit armReadyChanged();//更新状态
+            AudioFeedback::play(AudioFeedback::Cue::ConnectArm);
         }
         appendLog(QStringLiteral("机械臂协议握手成功"));
         if (m_taskActive) {
@@ -1103,7 +1132,9 @@ void TcpController::abortTask()
     appendLog(QStringLiteral("用户请求中止 SLAM 标定任务"));
 
     if (m_batchDownloadPhase) {
-        completeAbortedWorkflow(QStringLiteral("统一下载任务已中止"));
+        requestCollectFinish(QStringLiteral("统一下载任务中止"), [this](bool) {
+            completeAbortedWorkflow(QStringLiteral("统一下载任务已中止"));
+        });
         return;
     }
 
@@ -1131,10 +1162,23 @@ void TcpController::startNextSlot()
     }
 
     cleanupDeviceConnections();
+    const int previousIndex = m_currentQueueIndex;
     ++m_currentQueueIndex;
     if (m_currentQueueIndex >= m_taskQueue.size()) {
+        if (previousIndex >= 0 && previousIndex < m_taskQueue.size()) {
+            AudioFeedback::play(m_taskQueue.at(previousIndex).left
+                                    ? AudioFeedback::Cue::LeftTrayReady
+                                    : AudioFeedback::Cue::RightTrayReady);
+        }
         beginBatchDownloads();//最后一个结束，开始下载
         return;
+    }
+
+    if (previousIndex >= 0 && previousIndex < m_taskQueue.size()
+        && m_taskQueue.at(previousIndex).left
+        && !m_taskQueue.at(m_currentQueueIndex).left) {
+        AudioFeedback::play(AudioFeedback::Cue::LeftTrayReady);
+        AudioFeedback::play(AudioFeedback::Cue::ChangeTray);
     }
 
     resetCurrentDevice();
@@ -1177,6 +1221,7 @@ void TcpController::finishTask()
                      .arg(m_successCount).arg(m_failureCount));
     appendLog(QStringLiteral("SLAM 测量与统一下载任务完成：成功 %1，失败 %2")
                   .arg(m_successCount).arg(m_failureCount));
+    AudioFeedback::play(AudioFeedback::Cue::AllFinished);
 }
 
 void TcpController::resetCurrentDevice()
@@ -1351,6 +1396,7 @@ void TcpController::failCurrentDownload(const QString &reason)
         return;
 
     stopStepTimer();
+    AudioFeedback::playFailure(reason);
     if (m_ftpProcess->state() != QProcess::NotRunning)
         m_ftpProcess->kill();
     if (m_ftpDownloading) {
@@ -1366,7 +1412,11 @@ void TcpController::failCurrentDownload(const QString &reason)
                  QStringLiteral("%1 %2 号位下载失败，继续下一台：%3")
                      .arg(currentTray()).arg(currentSlot()).arg(reason));
     appendLog(QStringLiteral("统一下载失败，继续下一台: %1").arg(reason));
-    scheduleWorkflowAction(500, [this]() { startNextDeferredDownload(); });
+    requestCollectFinish(QStringLiteral("META 下载异常"), [this](bool finishOk) {
+        if (!finishOk)
+            appendLog(QStringLiteral("下载异常后的 AC_FINISH 未获成功确认，继续处理下一台"));
+        scheduleWorkflowAction(500, [this]() { startNextDeferredDownload(); });
+    });
 }
 
 void TcpController::failCurrentSlot(const QString &reason)
@@ -1382,6 +1432,7 @@ void TcpController::failCurrentSlot(const QString &reason)
         failCurrentDownload(reason);
         return;
     }
+    AudioFeedback::playFailure(reason);
     const FlowState failedState = m_flowState;
     stopStepTimer();
     setCurrentSlotState(QStringLiteral("failed"));
@@ -1484,6 +1535,7 @@ void TcpController::recordCurrentResult(const QString &result, const QString &re
         return QStringLiteral("\"%1\"").arg(value);
     };
 
+    const QString recordTime = QDateTime::currentDateTime().toString(Qt::ISODate);
     QTextStream stream(&file);
     stream.setCodec("UTF-8");
     if (needsHeader)
@@ -1491,7 +1543,7 @@ void TcpController::recordCurrentResult(const QString &result, const QString &re
     const QString dataPath = result == QStringLiteral("success") && !m_ftpLocalDir.isEmpty()
                                  ? m_ftpLocalDir
                                  : m_collectPath;
-    stream << csvField(QDateTime::currentDateTime().toString(Qt::ISODate)) << ','
+    stream << csvField(recordTime) << ','
            << csvField(currentTray()) << ','
            << currentSlot() << ','
            << csvField(m_currentSn) << ','
@@ -1501,6 +1553,18 @@ void TcpController::recordCurrentResult(const QString &result, const QString &re
            << csvField(dataPath) << ','
            << csvField(reason) << '\n';
     file.close();
+
+    QVariantMap databaseRow;
+    databaseRow.insert(QStringLiteral("time"), recordTime);
+    databaseRow.insert(QStringLiteral("tray"), currentTray());
+    databaseRow.insert(QStringLiteral("slot"), currentSlot());
+    databaseRow.insert(QStringLiteral("sn"), m_currentSn);
+    databaseRow.insert(QStringLiteral("hardware"), m_currentHardware);
+    databaseRow.insert(QStringLiteral("version"), m_currentVersion);
+    databaseRow.insert(QStringLiteral("result"), result);
+    databaseRow.insert(QStringLiteral("dataPath"), dataPath);
+    databaseRow.insert(QStringLiteral("error"), reason);
+    emit slamResultRecorded(databaseRow);
 
     if (m_currentQueueIndex < m_resultRecorded.size())
         m_resultRecorded[m_currentQueueIndex] = true;
@@ -1662,7 +1726,23 @@ void TcpController::checkWifiConnection()
                              QStringLiteral("统一下载 %1/%2：Wi-Fi 已连接，等待 FTP 就绪")
                                  .arg(m_currentDownloadIndex + 1)
                                  .arg(m_deferredDownloads.size()));
-                appendLog(QStringLiteral("设备 Wi-Fi 已连接，等待网络地址就绪后开始 FTP"));
+                appendLog(QStringLiteral("设备 Wi-Fi 已连接，提前连接 MQTT，并等待 FTP 就绪"));
+
+                // AC_FINISH must be sent after FTP completes. Establish MQTT
+                // now, in parallel with the download, instead of reconnecting
+                // only after the last file has already been downloaded.
+                if (m_mqttClient->state() == QMqttClient::Connected) {
+                    if (!m_mqttSubscribed)
+                        m_mqttSubscribed = subscribeMqttTopics();
+                } else if (m_mqttClient->state() == QMqttClient::Disconnected) {
+                    m_mqttSubscribed = false;
+                    m_mqttClient->setHostname(m_mqttHost);
+                    m_mqttClient->setPort(static_cast<quint16>(m_mqttPort));
+                    m_mqttClient->connectToHost();
+                    appendLog(QStringLiteral("统一下载阶段正在连接 MQTT %1:%2")
+                                  .arg(m_mqttHost).arg(m_mqttPort));
+                }
+
                 scheduleWorkflowAction(2500, [this, scheduledDownloadIndex]() {
                     if (!m_taskActive || !m_batchDownloadPhase
                         || m_currentDownloadIndex != scheduledDownloadIndex
@@ -2095,6 +2175,13 @@ void TcpController::resumeMqttOperation()
         if (!publishCollectAction(QStringLiteral("AC_STOP")))
             failCurrentSlot(QStringLiteral("MQTT 恢复后无法重新发送停止采集指令"));
         break;
+    case FlowState::FinishingCollection:
+        if (!publishCollectAction(QStringLiteral("AC_FINISH"), false))
+            completeCollectFinish(false,
+                                  QStringLiteral("MQTT 恢复后重新发送 AC_FINISH 失败"));
+        else
+            appendLog(QStringLiteral("MQTT 已恢复，重新发送 AC_FINISH"));
+        break;
     case FlowState::CreatingProject:
     case FlowState::CreatingTask:
         appendLog(QStringLiteral("MQTT 恢复后继续等待之前的 QoS 1 响应"));
@@ -2299,6 +2386,59 @@ bool TcpController::publishCollectAction(const QString &action, bool updateFlow)
     return true;
 }
 
+void TcpController::requestCollectFinish(const QString &context,
+                                         const std::function<void(bool)> &continuation)
+{
+    stopStepTimer();
+    m_collectFinishContinuation = continuation;
+    m_collectStatus = QStringLiteral("正在清理设备采集目录");
+    emit collectStatusChanged();
+    setFlowState(FlowState::FinishingCollection,
+                 QStringLiteral("正在通知设备完成采集并删除残留目录"),
+                 kCollectFinishTimeoutMs);
+
+    if (m_mqttClient->state() != QMqttClient::Connected) {
+        appendLog(QStringLiteral("发送 AC_FINISH 前 MQTT 未连接，先等待自动重连"));
+        if (m_mqttClient->state() == QMqttClient::Disconnected)
+            scheduleMqttReconnect();
+        return;
+    }
+
+    if (!m_mqttSubscribed)
+        m_mqttSubscribed = subscribeMqttTopics();
+    if (!m_mqttSubscribed) {
+        completeCollectFinish(false,
+                              QStringLiteral("无法订阅 AC_FINISH 响应主题"));
+        return;
+    }
+
+    if (!publishCollectAction(QStringLiteral("AC_FINISH"), false)) {
+        completeCollectFinish(false,
+                              QStringLiteral("AC_FINISH 发布失败"));
+        return;
+    }
+
+    appendLog(QStringLiteral("%1：已发送 data_collect AC_FINISH，等待设备删除采集目录")
+                  .arg(context));
+}
+
+void TcpController::completeCollectFinish(bool success, const QString &detail)
+{
+    stopStepTimer();
+    m_collectStatus = success ? QStringLiteral("设备采集目录已清理")
+                              : QStringLiteral("设备采集目录清理失败");
+    emit collectStatusChanged();
+    appendLog(success
+                  ? QStringLiteral("AC_FINISH 完成：%1").arg(detail)
+                  : QStringLiteral("AC_FINISH 未确认成功：%1").arg(detail));
+
+    const std::function<void(bool)> continuation =
+        std::move(m_collectFinishContinuation);
+    m_collectFinishContinuation = {};
+    if (continuation)
+        continuation(success);
+}
+
 void TcpController::tryStartModelingWhenArmHome()
 {
     // HOMEOK means that the arm is holding the device at P100.  Start the
@@ -2476,23 +2616,29 @@ void TcpController::finishGuaranteedMeasurementStop()
     m_guaranteedStopReason.clear();
     appendLog(QStringLiteral("设备已确认结束真实扫描和原始数据采集，兜底停止完成"));
 
-    if (needsPutBack && m_connected && m_armReady) {
-        requestPutBack(true);
-        return;
-    }
+    requestCollectFinish(QStringLiteral("异常停止收尾"),
+                         [this, afterAbort, needsPutBack, manualRecovery](bool finishOk) {
+        if (!finishOk)
+            appendLog(QStringLiteral("异常停止后的 AC_FINISH 未获成功确认，请检查设备残留目录"));
 
-    if (afterAbort || (needsPutBack && (!m_connected || !m_armReady))) {
-        completeAbortedWorkflow(
-            needsPutBack && (!m_connected || !m_armReady)
-                ? QStringLiteral("设备测量已停止，但机械臂连接中断，无法确认放回")
-                : (manualRecovery
-                       ? QStringLiteral("设备测量已停止；机械臂未确认到位，禁止自动放回，请人工恢复")
-                       : QStringLiteral("任务已中止，设备测量已确认停止")),
-            !manualRecovery);
-        return;
-    }
+        if (needsPutBack && m_connected && m_armReady) {
+            requestPutBack(true);
+            return;
+        }
 
-    scheduleWorkflowAction(0, [this]() { startNextSlot(); });
+        if (afterAbort || (needsPutBack && (!m_connected || !m_armReady))) {
+            completeAbortedWorkflow(
+                needsPutBack && (!m_connected || !m_armReady)
+                    ? QStringLiteral("设备测量已停止，但机械臂连接中断，无法确认放回")
+                    : (manualRecovery
+                           ? QStringLiteral("设备测量已停止；机械臂未确认到位，禁止自动放回，请人工恢复")
+                           : QStringLiteral("任务已中止，设备测量已确认停止")),
+                !manualRecovery);
+            return;
+        }
+
+        scheduleWorkflowAction(0, [this]() { startNextSlot(); });
+    });
 }
 
 void TcpController::abortAfterGuaranteedStopTimeout(const QString &reason)
@@ -2518,11 +2664,14 @@ void TcpController::abortAfterGuaranteedStopTimeout(const QString &reason)
     m_collectActive = false;
     m_aborting = true;
 
-    if (needsPutBack && m_connected && m_armReady) {
-        requestPutBack(true);
-        return;
-    }
-    completeAbortedWorkflow(reason, !manualRecovery);
+    requestCollectFinish(QStringLiteral("停止确认超时后的异常收尾"),
+                         [this, needsPutBack, manualRecovery, reason](bool) {
+        if (needsPutBack && m_connected && m_armReady) {
+            requestPutBack(true);
+            return;
+        }
+        completeAbortedWorkflow(reason, !manualRecovery);
+    });
 }
 
 void TcpController::handleMqttMessage(const QByteArray &message, const QString &topic)
@@ -2565,6 +2714,25 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
     if (!path.isEmpty() && path != m_collectPath) {
         m_collectPath = path; //下载路径
         emit collectPathChanged();
+    }
+
+    if (m_flowState == FlowState::FinishingCollection) {
+        const bool finished = errorCode == 0
+                              && (description.contains(QStringLiteral("collect finished"),
+                                                       Qt::CaseInsensitive)
+                                  || description.contains(QStringLiteral("dir removed"),
+                                                          Qt::CaseInsensitive));
+        if (finished) {
+            completeCollectFinish(true, description);
+        } else if (errorCode != 0) {
+            completeCollectFinish(false,
+                                  QStringLiteral("设备返回错误码 %1：%2")
+                                      .arg(errorCode).arg(description));
+        } else {
+            appendLog(QStringLiteral("等待 AC_FINISH 确认时收到其他采集响应，继续等待：%1")
+                          .arg(description));
+        }
+        return;
     }
 
     const bool alreadyCollecting = description.contains(QStringLiteral("already active"),
@@ -2682,7 +2850,7 @@ void TcpController::handleMqttMessage(const QByteArray &message, const QString &
                 failCurrentSlot(QStringLiteral("原始数据记录已启动，但设备真实扫描或 P100 状态无效"));
             } else if (m_armMotionFinished) {
                 failCurrentSlot(QStringLiteral("原始数据记录启动过晚：机械臂轨迹已经结束"));
-            } else if (!sendArmCommand(QStringLiteral("$$MT,SCANREADY"))) {
+            } else if (!sendArmCommand(QStringLiteral("$$MT,SCANREADY"))) {//释放标定轨迹
                 failCurrentSlot(QStringLiteral("原始数据记录已启动，但无法通知机械臂执行标定轨迹"));
             } else {
                 appendLog(QStringLiteral("真实扫描和原始记录均已就绪，发送 SCANREADY 释放 SLAM 标定轨迹"));
@@ -3195,11 +3363,25 @@ void TcpController::finishFtpDownload()
     if (m_batchDownloadPhase) {
         m_collectStatus = QStringLiteral("数据下载完成");
         emit collectStatusChanged();
-        markCurrentSuccess();
-        scheduleWorkflowAction(0, [this]() { startNextDeferredDownload(); });//下一个文件
+        requestCollectFinish(QStringLiteral("META 下载完成"), [this](bool finishOk) {
+            if (finishOk) {
+                markCurrentSuccess();
+            } else {
+                const QString reason = QStringLiteral(
+                    "META 已下载，但设备 AC_FINISH 清理目录失败");
+                setCurrentSlotState(QStringLiteral("failed"));
+                setLastError(reason);
+                recordCurrentResult(QStringLiteral("failed"), reason);
+            }
+            scheduleWorkflowAction(0, [this]() { startNextDeferredDownload(); });//下一个文件
+        });
         return;
     }
-    requestPutBack(false);
+    requestCollectFinish(QStringLiteral("META 下载完成"), [this](bool finishOk) {
+        if (!finishOk)
+            appendLog(QStringLiteral("META 已下载，但设备端采集目录未确认清理"));
+        requestPutBack(!finishOk);
+    });
 }
 
 void TcpController::onStepTimeout()
@@ -3249,6 +3431,9 @@ void TcpController::onStepTimeout()
         break;
     case FlowState::StoppingCollection:
         failCurrentSlot(QStringLiteral("等待设备停止采集超时"));
+        break;
+    case FlowState::FinishingCollection:
+        completeCollectFinish(false, QStringLiteral("等待设备 AC_FINISH 响应超时"));
         break;
     case FlowState::StoppingModeling:
         failCurrentSlot(QStringLiteral("等待设备停止扫描并保存工程超时"));
@@ -3352,6 +3537,8 @@ void TcpController::completeAbortedWorkflow(const QString &progress, bool notify
     cleanupDeviceConnections();
     if (wasRunning)
         emit armRunningChanged();
+    if (wasRunning && progress.contains(QStringLiteral("中止")))
+        AudioFeedback::play(AudioFeedback::Cue::Reset);
 
     if (!m_connected) {
         setFlowState(FlowState::Idle,

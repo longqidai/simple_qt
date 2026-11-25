@@ -17,6 +17,8 @@ class LaserCalibrationController final : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool armConnected READ armConnected NOTIFY armConnectedChanged)
+    Q_PROPERTY(QString armHost READ armHost NOTIFY armEndpointChanged)
+    Q_PROPERTY(int armPort READ armPort NOTIFY armEndpointChanged)
     Q_PROPERTY(bool receiverConnected READ receiverConnected NOTIFY receiverConnectedChanged)
     Q_PROPERTY(bool wifiConnected READ wifiConnected NOTIFY wifiConnectedChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
@@ -52,6 +54,8 @@ public:
     ~LaserCalibrationController() override;
 
     bool armConnected() const;
+    QString armHost() const;
+    int armPort() const;
     bool receiverConnected() const;
     bool wifiConnected() const;
     bool running() const;
@@ -95,11 +99,13 @@ public:
     Q_INVOKABLE QString slotStatus(const QString &tray, int slot) const;
     Q_INVOKABLE bool exportResults(const QString &filePath = QString());
     Q_INVOKABLE QVariantList queryResults(const QString &sn = QString()) const;
+    Q_INVOKABLE void saveSlamResult(const QVariantMap &row);
     Q_INVOKABLE void clearLog();
     Q_INVOKABLE void shutdown();
 
 signals:
     void armConnectedChanged();
+    void armEndpointChanged();
     void receiverConnectedChanged();
     void wifiConnectedChanged();
     void runningChanged();
@@ -142,6 +148,7 @@ private:
         WaitingFace6,
         MeasuringHorizontalFar,
         WaitingAngle,
+        WaitingReturnHome,
         WaitingPutback,
         Aborting
     };
@@ -219,9 +226,10 @@ private:
     void updateSlotStatus(const QString &tray, int slot, const QString &status);
     void addResult(bool success, const QString &reason);
     bool initializeDatabase();
+    void importLegacySlamResults();
     void saveResultToDatabase(const QVariantMap &row);
     QString defaultExportPath() const;
-    static QString normalizeSn(const QString &value);
+    QString normalizeSn(const QString &value) const;
     static bool finiteNumber(const QVariant &value, double *result);
 
     QTcpSocket m_armSocket;
