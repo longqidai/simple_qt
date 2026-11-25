@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1980" height="5333" viewBox="0 0 1980 5333">
+<svg xmlns="http://www.w3.org/2000/svg" width="1980" height="5411" viewBox="0 0 1980 5411">
   <defs>
     <marker id="arrow" markerWidth="12" markerHeight="9" refX="10" refY="4.5" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L10,4.5 L0,9 z" fill="#334155"/>
@@ -20,19 +20,19 @@
   <text class="title" x="990" y="55" text-anchor="middle">simple_qt：激光标定正常流程（当前单摄像头版本）</text>
   <rect x="-25" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="110" y="121" text-anchor="middle">操作界面 / QML</text>
-  <line class="life" x1="110" y1="143" x2="110" y2="5253"/>
+  <line class="life" x1="110" y1="143" x2="110" y2="5331"/>
   <rect x="415" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="550" y="121" text-anchor="middle">LaserCalibrationController</text>
-  <line class="life" x1="550" y1="143" x2="550" y2="5253"/>
+  <line class="life" x1="550" y1="143" x2="550" y2="5331"/>
   <rect x="855" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="990" y="121" text-anchor="middle">机械臂</text>
-  <line class="life" x1="990" y1="143" x2="990" y2="5253"/>
+  <line class="life" x1="990" y1="143" x2="990" y2="5331"/>
   <rect x="1295" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="1430" y="121" text-anchor="middle">接收机设备</text>
-  <line class="life" x1="1430" y1="143" x2="1430" y2="5253"/>
+  <line class="life" x1="1430" y1="143" x2="1430" y2="5331"/>
   <rect x="1735" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="1870" y="121" text-anchor="middle">LaserVisionProcessor</text>
-  <line class="life" x1="1870" y1="143" x2="1870" y2="5253"/>
+  <line class="life" x1="1870" y1="143" x2="1870" y2="5331"/>
   <rect x="35" y="137" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
   <text class="stage" x="55" y="165">A. 程序初始化、机械臂握手与任务开始</text>
   <text class="step" x="36" y="228">01</text>
@@ -63,253 +63,257 @@
   <text class="step" x="36" y="696">07</text>
   <line class="arrow" x1="110" y1="691" x2="550" y2="691"/>
   <rect x="132" y="657" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="330" y="679" text-anchor="middle">选择槽位并点击开始</text>
-  <text class="sub" x="330" y="713" text-anchor="middle">startCalibration()</text>
+  <text class="label" x="330" y="679" text-anchor="middle">选择设备型号、槽位并点击开始</text>
+  <text class="sub" x="330" y="713" text-anchor="middle">GRR13/17/20 或 SLAM；SLAM 仅1～8号槽</text>
   <text class="step" x="36" y="774">08</text>
   <rect x="360" y="741" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="766" text-anchor="middle">校验水平线高、建立槽位队列</text>
-  <text class="sub" x="550" y="789" text-anchor="middle">beginNextSlot() → beginCurrentSlot()</text>
-  <rect x="35" y="819" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="847">B. 单个槽位循环：扫码、Wi-Fi 与接收机信息</text>
-  <text class="step" x="36" y="910">09</text>
-  <line class="arrow" x1="550" y1="905" x2="990" y2="905"/>
-  <rect x="572" y="871" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="893" text-anchor="middle">设置托盘与槽位</text>
-  <text class="sub" x="770" y="927" text-anchor="middle">SETMOD1/SETMOD2 + 槽位号 + $$MT,NEXT</text>
+  <text class="label" x="550" y="766" text-anchor="middle">选择匹配机械臂工程</text>
+  <text class="sub" x="550" y="789" text-anchor="middle">SLAM 使用 SLAM_GRR；GRR 系列使用对应 GRR 工程</text>
+  <text class="step" x="36" y="852">09</text>
+  <rect x="360" y="819" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="844" text-anchor="middle">校验水平线高、建立槽位队列</text>
+  <text class="sub" x="550" y="867" text-anchor="middle">beginNextSlot() → beginCurrentSlot()</text>
+  <rect x="35" y="897" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="925">B. 单个槽位循环：扫码、Wi-Fi 与接收机信息</text>
   <text class="step" x="36" y="988">10</text>
-  <line class="arrow" x1="990" y1="983" x2="990" y2="983"/>
-  <rect x="792" y="949" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="971" text-anchor="middle">机械臂移动并扫描 SN</text>
+  <line class="arrow" x1="550" y1="983" x2="990" y2="983"/>
+  <rect x="572" y="949" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="971" text-anchor="middle">设置托盘与槽位</text>
+  <text class="sub" x="770" y="1005" text-anchor="middle">SETMOD1/SETMOD2 + 槽位号 + $$MT,NEXT</text>
   <text class="step" x="36" y="1066">11</text>
-  <line class="return" x1="990" y1="1061" x2="550" y2="1061"/>
-  <rect x="572" y="1027" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="1049" text-anchor="middle">返回 SN</text>
-  <text class="sub" x="770" y="1083" text-anchor="middle">processArmBuffer() → handleScannedSn()</text>
+  <line class="arrow" x1="990" y1="1061" x2="990" y2="1061"/>
+  <rect x="792" y="1027" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1049" text-anchor="middle">机械臂移动并扫描 SN</text>
   <text class="step" x="36" y="1144">12</text>
-  <rect x="360" y="1111" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="1136" text-anchor="middle">按 SN 连接设备 Wi-Fi，等待 DHCP</text>
-  <text class="sub" x="550" y="1159" text-anchor="middle">connectWifiByNamePart() / m_wifiTimer</text>
+  <line class="return" x1="990" y1="1139" x2="550" y2="1139"/>
+  <rect x="572" y="1105" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="1127" text-anchor="middle">返回 SN</text>
+  <text class="sub" x="770" y="1161" text-anchor="middle">processArmBuffer() → handleScannedSn()</text>
   <text class="step" x="36" y="1222">13</text>
-  <line class="arrow" x1="550" y1="1217" x2="1430" y2="1217"/>
-  <rect x="792" y="1183" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1205" text-anchor="middle">连接接收机 TCP 192.168.1.8:25001</text>
-  <text class="sub" x="990" y="1239" text-anchor="middle">connectReceiver()</text>
+  <rect x="360" y="1189" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="1214" text-anchor="middle">按 SN 连接设备 Wi-Fi，等待 DHCP</text>
+  <text class="sub" x="550" y="1237" text-anchor="middle">connectWifiByNamePart() / m_wifiTimer</text>
   <text class="step" x="36" y="1300">14</text>
   <line class="arrow" x1="550" y1="1295" x2="1430" y2="1295"/>
   <rect x="792" y="1261" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1283" text-anchor="middle">查询硬件号与版本</text>
-  <text class="sub" x="990" y="1317" text-anchor="middle">unlogall + $$SI + log versionb</text>
+  <text class="label" x="990" y="1283" text-anchor="middle">连接接收机 TCP 192.168.1.8:25001</text>
+  <text class="sub" x="990" y="1317" text-anchor="middle">connectReceiver()</text>
   <text class="step" x="36" y="1378">15</text>
-  <line class="return" x1="1430" y1="1373" x2="550" y2="1373"/>
+  <line class="arrow" x1="550" y1="1373" x2="1430" y2="1373"/>
   <rect x="792" y="1339" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1361" text-anchor="middle">返回 $$SI 与144字节 versionb</text>
-  <text class="sub" x="990" y="1395" text-anchor="middle">processReceiverBuffer()</text>
+  <text class="label" x="990" y="1361" text-anchor="middle">查询硬件号与版本</text>
+  <text class="sub" x="990" y="1395" text-anchor="middle">unlogall + $$SI + log versionb</text>
   <text class="step" x="36" y="1456">16</text>
-  <line class="arrow" x1="550" y1="1451" x2="1430" y2="1451"/>
+  <line class="return" x1="1430" y1="1451" x2="550" y2="1451"/>
   <rect x="792" y="1417" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1439" text-anchor="middle">订阅 LASERBACK 并复位标定</text>
-  <text class="sub" x="990" y="1473" text-anchor="middle">log laserback ontime 1 + set laser reset calibration</text>
-  <rect x="35" y="1501" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="1529">C. 面1、面2与垂直远点视觉测量</text>
-  <text class="step" x="36" y="1592">17</text>
-  <line class="arrow" x1="550" y1="1587" x2="990" y2="1587"/>
-  <rect x="572" y="1553" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="1575" text-anchor="middle">移动标定点1 $$MT,NEXT1</text>
+  <text class="label" x="990" y="1439" text-anchor="middle">返回 $$SI 与144字节 versionb</text>
+  <text class="sub" x="990" y="1473" text-anchor="middle">processReceiverBuffer()</text>
+  <text class="step" x="36" y="1534">17</text>
+  <line class="arrow" x1="550" y1="1529" x2="1430" y2="1529"/>
+  <rect x="792" y="1495" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1517" text-anchor="middle">订阅 LASERBACK 并复位标定</text>
+  <text class="sub" x="990" y="1551" text-anchor="middle">log laserback ontime 1 + set laser reset calibration</text>
+  <rect x="35" y="1579" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="1607">C. 面1、面2与垂直远点视觉测量</text>
   <text class="step" x="36" y="1670">18</text>
-  <line class="return" x1="990" y1="1665" x2="550" y2="1665"/>
+  <line class="arrow" x1="550" y1="1665" x2="990" y2="1665"/>
   <rect x="572" y="1631" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="1653" text-anchor="middle">到位返回 MT,OK</text>
+  <text class="label" x="770" y="1653" text-anchor="middle">移动标定点1 $$MT,NEXT1</text>
   <text class="step" x="36" y="1748">19</text>
-  <line class="arrow" x1="550" y1="1743" x2="1430" y2="1743"/>
-  <rect x="792" y="1709" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1731" text-anchor="middle">面1校准 set laser planar calibration</text>
+  <line class="return" x1="990" y1="1743" x2="550" y2="1743"/>
+  <rect x="572" y="1709" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="1731" text-anchor="middle">到位返回 MT,OK</text>
   <text class="step" x="36" y="1826">20</text>
-  <line class="return" x1="1430" y1="1821" x2="550" y2="1821"/>
+  <line class="arrow" x1="550" y1="1821" x2="1430" y2="1821"/>
   <rect x="792" y="1787" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="1809" text-anchor="middle">等待并返回 $LASERBACK：面1 restState=2</text>
+  <text class="label" x="990" y="1809" text-anchor="middle">面1校准 set laser planar calibration</text>
   <text class="step" x="36" y="1904">21</text>
-  <line class="arrow" x1="550" y1="1899" x2="990" y2="1899"/>
-  <rect x="572" y="1865" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="1887" text-anchor="middle">移动标定点2 $$MT,NEXT2</text>
+  <line class="return" x1="1430" y1="1899" x2="550" y2="1899"/>
+  <rect x="792" y="1865" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="1887" text-anchor="middle">等待并返回 $LASERBACK：面1 restState=2</text>
   <text class="step" x="36" y="1982">22</text>
-  <line class="return" x1="990" y1="1977" x2="550" y2="1977"/>
+  <line class="arrow" x1="550" y1="1977" x2="990" y2="1977"/>
   <rect x="572" y="1943" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="1965" text-anchor="middle">到位返回 MT,OK</text>
+  <text class="label" x="770" y="1965" text-anchor="middle">移动标定点2 $$MT,NEXT2</text>
   <text class="step" x="36" y="2060">23</text>
-  <line class="arrow" x1="550" y1="2055" x2="1430" y2="2055"/>
-  <rect x="792" y="2021" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="2043" text-anchor="middle">面2校准 set laser planar calibration</text>
+  <line class="return" x1="990" y1="2055" x2="550" y2="2055"/>
+  <rect x="572" y="2021" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2043" text-anchor="middle">到位返回 MT,OK</text>
   <text class="step" x="36" y="2138">24</text>
-  <line class="return" x1="1430" y1="2133" x2="550" y2="2133"/>
+  <line class="arrow" x1="550" y1="2133" x2="1430" y2="2133"/>
   <rect x="792" y="2099" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="2121" text-anchor="middle">等待并返回 $LASERBACK：面2 restState=2</text>
+  <text class="label" x="990" y="2121" text-anchor="middle">面2校准 set laser planar calibration</text>
   <text class="step" x="36" y="2216">25</text>
-  <rect x="360" y="2183" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="2208" text-anchor="middle">单摄像头方案：跳过近焦测量</text>
-  <text class="sub" x="550" y="2231" text-anchor="middle">垂直近点=520；水平近点=界面水平线高</text>
+  <line class="return" x1="1430" y1="2211" x2="550" y2="2211"/>
+  <rect x="792" y="2177" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2199" text-anchor="middle">等待并返回 $LASERBACK：面2 restState=2</text>
   <text class="step" x="36" y="2294">26</text>
-  <line class="arrow" x1="550" y1="2289" x2="990" y2="2289"/>
-  <rect x="572" y="2255" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="2277" text-anchor="middle">移动垂直远点 $$MT,NEXT3</text>
+  <rect x="360" y="2261" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="2286" text-anchor="middle">单摄像头方案：跳过近焦测量</text>
+  <text class="sub" x="550" y="2309" text-anchor="middle">SLAM固定水平680/垂直436；GRR按型号固定值</text>
   <text class="step" x="36" y="2372">27</text>
-  <line class="return" x1="990" y1="2367" x2="550" y2="2367"/>
+  <line class="arrow" x1="550" y1="2367" x2="990" y2="2367"/>
   <rect x="572" y="2333" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="2355" text-anchor="middle">到位返回 MT,OK</text>
+  <text class="label" x="770" y="2355" text-anchor="middle">移动垂直远点 $$MT,NEXT3</text>
   <text class="step" x="36" y="2450">28</text>
-  <line class="arrow" x1="550" y1="2445" x2="1430" y2="2445"/>
-  <rect x="792" y="2411" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="2433" text-anchor="middle">开启周期测距与自动测距</text>
-  <text class="sub" x="990" y="2467" text-anchor="middle">log laserrangingb ontime 1 + set laser survey auto</text>
+  <line class="return" x1="990" y1="2445" x2="550" y2="2445"/>
+  <rect x="572" y="2411" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="2433" text-anchor="middle">到位返回 MT,OK</text>
   <text class="step" x="36" y="2528">29</text>
-  <line class="return" x1="1430" y1="2523" x2="550" y2="2523"/>
+  <line class="arrow" x1="550" y1="2523" x2="1430" y2="2523"/>
   <rect x="792" y="2489" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="2511" text-anchor="middle">持续返回40字节激光测距帧</text>
-  <text class="sub" x="990" y="2545" text-anchor="middle">processLaserRangeFrame() 更新 m_laserDistance</text>
+  <text class="label" x="990" y="2511" text-anchor="middle">开启周期测距与自动测距</text>
+  <text class="sub" x="990" y="2545" text-anchor="middle">log laserrangingb ontime 1 + set laser survey auto</text>
   <text class="step" x="36" y="2606">30</text>
-  <line class="arrow" x1="550" y1="2601" x2="1870" y2="2601"/>
-  <rect x="1012" y="2567" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="1210" y="2589" text-anchor="middle">提交垂直远点视觉任务</text>
-  <text class="sub" x="1210" y="2623" text-anchor="middle">startVisionMeasurement() → requestMeasurement(false)</text>
+  <line class="return" x1="1430" y1="2601" x2="550" y2="2601"/>
+  <rect x="792" y="2567" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="2589" text-anchor="middle">持续返回40字节激光测距帧</text>
+  <text class="sub" x="990" y="2623" text-anchor="middle">processLaserRangeFrame() 更新 m_laserDistance</text>
   <text class="step" x="36" y="2684">31</text>
-  <rect x="1558" y="2651" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="1748" y="2676" text-anchor="middle">后台线程打开远焦摄像头并执行OpenCV</text>
-  <text class="sub" x="1748" y="2699" text-anchor="middle">QtConcurrent::run(runMeasurement)</text>
+  <line class="arrow" x1="550" y1="2679" x2="1870" y2="2679"/>
+  <rect x="1012" y="2645" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="1210" y="2667" text-anchor="middle">提交垂直远点视觉任务</text>
+  <text class="sub" x="1210" y="2701" text-anchor="middle">startVisionMeasurement() → requestMeasurement(false)</text>
   <text class="step" x="36" y="2762">32</text>
-  <line class="return" x1="1870" y1="2757" x2="550" y2="2757"/>
-  <rect x="1012" y="2723" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="1210" y="2745" text-anchor="middle">measurementFinished(success,height,image)</text>
+  <rect x="1558" y="2729" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="1748" y="2754" text-anchor="middle">后台线程打开远焦摄像头并执行OpenCV</text>
+  <text class="sub" x="1748" y="2777" text-anchor="middle">QtConcurrent::run(runMeasurement)</text>
   <text class="step" x="36" y="2840">33</text>
-  <rect x="360" y="2807" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="2832" text-anchor="middle">保存垂直远点高度和测距</text>
-  <text class="sub" x="550" y="2855" text-anchor="middle">handleVisionMeasurement()</text>
-  <rect x="35" y="2885" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="2913">D. 面3～面6与水平远点视觉测量</text>
-  <text class="step" x="36" y="2976">34</text>
-  <line class="arrow" x1="550" y1="2971" x2="990" y2="2971"/>
-  <rect x="572" y="2937" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="2959" text-anchor="middle">移动点4，执行面3校准</text>
-  <text class="sub" x="770" y="2993" text-anchor="middle">NEXT4 → MT,OK → planar calibration</text>
+  <line class="return" x1="1870" y1="2835" x2="550" y2="2835"/>
+  <rect x="1012" y="2801" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="1210" y="2823" text-anchor="middle">measurementFinished(success,height,image)</text>
+  <text class="step" x="36" y="2918">34</text>
+  <rect x="360" y="2885" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="2910" text-anchor="middle">保存垂直远点高度和测距</text>
+  <text class="sub" x="550" y="2933" text-anchor="middle">handleVisionMeasurement()</text>
+  <rect x="35" y="2963" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="2991">D. 面3～面6与水平远点视觉测量</text>
   <text class="step" x="36" y="3054">35</text>
-  <line class="arrow" x1="550" y1="3049" x2="1430" y2="3049"/>
-  <rect x="792" y="3015" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3037" text-anchor="middle">面3校准命令</text>
+  <line class="arrow" x1="550" y1="3049" x2="990" y2="3049"/>
+  <rect x="572" y="3015" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3037" text-anchor="middle">移动点4，执行面3校准</text>
+  <text class="sub" x="770" y="3071" text-anchor="middle">NEXT4 → MT,OK → planar calibration</text>
   <text class="step" x="36" y="3132">36</text>
-  <line class="return" x1="1430" y1="3127" x2="550" y2="3127"/>
+  <line class="arrow" x1="550" y1="3127" x2="1430" y2="3127"/>
   <rect x="792" y="3093" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3115" text-anchor="middle">$LASERBACK：面3完成</text>
+  <text class="label" x="990" y="3115" text-anchor="middle">面3校准命令</text>
   <text class="step" x="36" y="3210">37</text>
-  <line class="arrow" x1="550" y1="3205" x2="990" y2="3205"/>
-  <rect x="572" y="3171" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3193" text-anchor="middle">移动点5，执行面4校准</text>
-  <text class="sub" x="770" y="3227" text-anchor="middle">NEXT5 → MT,OK</text>
+  <line class="return" x1="1430" y1="3205" x2="550" y2="3205"/>
+  <rect x="792" y="3171" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3193" text-anchor="middle">$LASERBACK：面3完成</text>
   <text class="step" x="36" y="3288">38</text>
-  <line class="arrow" x1="550" y1="3283" x2="1430" y2="3283"/>
-  <rect x="792" y="3249" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3271" text-anchor="middle">面4校准命令</text>
+  <line class="arrow" x1="550" y1="3283" x2="990" y2="3283"/>
+  <rect x="572" y="3249" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3271" text-anchor="middle">移动点5，执行面4校准</text>
+  <text class="sub" x="770" y="3305" text-anchor="middle">NEXT5 → MT,OK</text>
   <text class="step" x="36" y="3366">39</text>
-  <line class="return" x1="1430" y1="3361" x2="550" y2="3361"/>
+  <line class="arrow" x1="550" y1="3361" x2="1430" y2="3361"/>
   <rect x="792" y="3327" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3349" text-anchor="middle">$LASERBACK：面4完成</text>
+  <text class="label" x="990" y="3349" text-anchor="middle">面4校准命令</text>
   <text class="step" x="36" y="3444">40</text>
-  <line class="arrow" x1="550" y1="3439" x2="990" y2="3439"/>
-  <rect x="572" y="3405" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3427" text-anchor="middle">移动点6，执行面5校准</text>
-  <text class="sub" x="770" y="3461" text-anchor="middle">NEXT6 → MT,OK</text>
+  <line class="return" x1="1430" y1="3439" x2="550" y2="3439"/>
+  <rect x="792" y="3405" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3427" text-anchor="middle">$LASERBACK：面4完成</text>
   <text class="step" x="36" y="3522">41</text>
-  <line class="arrow" x1="550" y1="3517" x2="1430" y2="3517"/>
-  <rect x="792" y="3483" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3505" text-anchor="middle">面5校准命令</text>
+  <line class="arrow" x1="550" y1="3517" x2="990" y2="3517"/>
+  <rect x="572" y="3483" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3505" text-anchor="middle">移动点6，执行面5校准</text>
+  <text class="sub" x="770" y="3539" text-anchor="middle">NEXT6 → MT,OK</text>
   <text class="step" x="36" y="3600">42</text>
-  <line class="return" x1="1430" y1="3595" x2="550" y2="3595"/>
+  <line class="arrow" x1="550" y1="3595" x2="1430" y2="3595"/>
   <rect x="792" y="3561" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3583" text-anchor="middle">$LASERBACK：面5完成</text>
+  <text class="label" x="990" y="3583" text-anchor="middle">面5校准命令</text>
   <text class="step" x="36" y="3678">43</text>
-  <line class="arrow" x1="550" y1="3673" x2="990" y2="3673"/>
-  <rect x="572" y="3639" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3661" text-anchor="middle">移动点7，执行面6校准</text>
-  <text class="sub" x="770" y="3695" text-anchor="middle">NEXT7 → MT,OK</text>
+  <line class="return" x1="1430" y1="3673" x2="550" y2="3673"/>
+  <rect x="792" y="3639" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3661" text-anchor="middle">$LASERBACK：面5完成</text>
   <text class="step" x="36" y="3756">44</text>
-  <line class="arrow" x1="550" y1="3751" x2="1430" y2="3751"/>
-  <rect x="792" y="3717" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3739" text-anchor="middle">面6校准命令</text>
+  <line class="arrow" x1="550" y1="3751" x2="990" y2="3751"/>
+  <rect x="572" y="3717" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3739" text-anchor="middle">移动点7，执行面6校准</text>
+  <text class="sub" x="770" y="3773" text-anchor="middle">NEXT7 → MT,OK</text>
   <text class="step" x="36" y="3834">45</text>
-  <line class="return" x1="1430" y1="3829" x2="550" y2="3829"/>
+  <line class="arrow" x1="550" y1="3829" x2="1430" y2="3829"/>
   <rect x="792" y="3795" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3817" text-anchor="middle">$LASERBACK：面6完成</text>
+  <text class="label" x="990" y="3817" text-anchor="middle">面6校准命令</text>
   <text class="step" x="36" y="3912">46</text>
-  <line class="arrow" x1="550" y1="3907" x2="1430" y2="3907"/>
+  <line class="return" x1="1430" y1="3907" x2="550" y2="3907"/>
   <rect x="792" y="3873" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3895" text-anchor="middle">重新开启激光、周期测距和自动测距</text>
+  <text class="label" x="990" y="3895" text-anchor="middle">$LASERBACK：面6完成</text>
   <text class="step" x="36" y="3990">47</text>
-  <line class="return" x1="1430" y1="3985" x2="550" y2="3985"/>
+  <line class="arrow" x1="550" y1="3985" x2="1430" y2="3985"/>
   <rect x="792" y="3951" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3973" text-anchor="middle">持续更新水平远点激光距离</text>
+  <text class="label" x="990" y="3973" text-anchor="middle">重新开启激光、周期测距和自动测距</text>
   <text class="step" x="36" y="4068">48</text>
-  <line class="arrow" x1="550" y1="4063" x2="1870" y2="4063"/>
-  <rect x="1012" y="4029" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="1210" y="4051" text-anchor="middle">提交水平远点视觉任务</text>
+  <line class="return" x1="1430" y1="4063" x2="550" y2="4063"/>
+  <rect x="792" y="4029" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4051" text-anchor="middle">持续更新水平远点激光距离</text>
   <text class="step" x="36" y="4146">49</text>
-  <rect x="1558" y="4113" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="1748" y="4138" text-anchor="middle">后台执行远焦摄像头与OpenCV算法</text>
+  <line class="arrow" x1="550" y1="4141" x2="1870" y2="4141"/>
+  <rect x="1012" y="4107" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="1210" y="4129" text-anchor="middle">提交水平远点视觉任务</text>
   <text class="step" x="36" y="4224">50</text>
-  <line class="return" x1="1870" y1="4219" x2="550" y2="4219"/>
-  <rect x="1012" y="4185" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="1210" y="4207" text-anchor="middle">measurementFinished(success,height,image)</text>
+  <rect x="1558" y="4191" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="1748" y="4216" text-anchor="middle">后台执行远焦摄像头与OpenCV算法</text>
   <text class="step" x="36" y="4302">51</text>
-  <rect x="360" y="4269" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="4294" text-anchor="middle">保存水平远点高度和测距</text>
-  <text class="sub" x="550" y="4317" text-anchor="middle">handleVisionMeasurement()</text>
-  <rect x="35" y="4347" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="4375">E. 六参数角度校准、保存结果与放回</text>
-  <text class="step" x="36" y="4438">52</text>
-  <rect x="360" y="4405" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="4430" text-anchor="middle">组成六参数</text>
-  <text class="sub" x="550" y="4453" text-anchor="middle">水平[近点,远点,长度] + 垂直[近点,远点,长度]</text>
+  <line class="return" x1="1870" y1="4297" x2="550" y2="4297"/>
+  <rect x="1012" y="4263" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="1210" y="4285" text-anchor="middle">measurementFinished(success,height,image)</text>
+  <text class="step" x="36" y="4380">52</text>
+  <rect x="360" y="4347" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4372" text-anchor="middle">保存水平远点高度和测距</text>
+  <text class="sub" x="550" y="4395" text-anchor="middle">handleVisionMeasurement()</text>
+  <rect x="35" y="4425" width="1910" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="4453">E. 六参数角度校准、保存结果与放回</text>
   <text class="step" x="36" y="4516">53</text>
-  <line class="arrow" x1="550" y1="4511" x2="1430" y2="4511"/>
-  <rect x="792" y="4477" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4499" text-anchor="middle">关闭激光和周期测距</text>
+  <rect x="360" y="4483" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4508" text-anchor="middle">组成六参数</text>
+  <text class="sub" x="550" y="4531" text-anchor="middle">水平[近点,远点,长度] + 垂直[近点,远点,长度]</text>
   <text class="step" x="36" y="4594">54</text>
   <line class="arrow" x1="550" y1="4589" x2="1430" y2="4589"/>
   <rect x="792" y="4555" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4577" text-anchor="middle">发送角度校准六参数</text>
-  <text class="sub" x="990" y="4611" text-anchor="middle">set laser angle calibration ...</text>
+  <text class="label" x="990" y="4577" text-anchor="middle">关闭激光和周期测距</text>
   <text class="step" x="36" y="4672">55</text>
-  <line class="return" x1="1430" y1="4667" x2="550" y2="4667"/>
+  <line class="arrow" x1="550" y1="4667" x2="1430" y2="4667"/>
   <rect x="792" y="4633" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4655" text-anchor="middle">最终 $LASERBACK：sideState=1 + pitch/yaw/bias</text>
+  <text class="label" x="990" y="4655" text-anchor="middle">发送角度校准六参数</text>
+  <text class="sub" x="990" y="4689" text-anchor="middle">set laser angle calibration ...</text>
   <text class="step" x="36" y="4750">56</text>
-  <rect x="360" y="4717" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="4742" text-anchor="middle">保存最终结果与数据库记录</text>
-  <text class="sub" x="550" y="4765" text-anchor="middle">handleLaserBack() / addResult() / saveResultToDatabase()</text>
+  <line class="return" x1="1430" y1="4745" x2="550" y2="4745"/>
+  <rect x="792" y="4711" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4733" text-anchor="middle">最终 $LASERBACK：sideState=1 + pitch/yaw/bias</text>
   <text class="step" x="36" y="4828">57</text>
-  <line class="arrow" x1="550" y1="4823" x2="990" y2="4823"/>
-  <rect x="572" y="4789" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="4811" text-anchor="middle">通知成功并安全放回 $$MT,SUCCESS</text>
+  <rect x="360" y="4795" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4820" text-anchor="middle">保存最终结果与数据库记录</text>
+  <text class="sub" x="550" y="4843" text-anchor="middle">handleLaserBack() / addResult() / saveResultToDatabase()</text>
   <text class="step" x="36" y="4906">58</text>
-  <line class="arrow" x1="990" y1="4901" x2="990" y2="4901"/>
-  <rect x="792" y="4867" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4889" text-anchor="middle">机械臂回 Home 并放回设备</text>
+  <line class="arrow" x1="550" y1="4901" x2="990" y2="4901"/>
+  <rect x="572" y="4867" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="4889" text-anchor="middle">通知成功并安全放回 $$MT,SUCCESS</text>
   <text class="step" x="36" y="4984">59</text>
-  <line class="return" x1="990" y1="4979" x2="550" y2="4979"/>
-  <rect x="572" y="4945" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="4967" text-anchor="middle">返回 MT,OK</text>
+  <line class="arrow" x1="990" y1="4979" x2="990" y2="4979"/>
+  <rect x="792" y="4945" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4967" text-anchor="middle">机械臂回 Home 并放回设备</text>
   <text class="step" x="36" y="5062">60</text>
-  <rect x="360" y="5029" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="5054" text-anchor="middle">completeCurrentSlot() → beginNextSlot()</text>
-  <text class="sub" x="550" y="5077" text-anchor="middle">尚有槽位则重复 B～E</text>
+  <line class="return" x1="990" y1="5057" x2="550" y2="5057"/>
+  <rect x="572" y="5023" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="5045" text-anchor="middle">返回 MT,OK</text>
   <text class="step" x="36" y="5140">61</text>
   <rect x="360" y="5107" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="5132" text-anchor="middle">全部槽位完成</text>
-  <text class="sub" x="550" y="5155" text-anchor="middle">finishBatch()，关闭激光/测距/订阅</text>
-  <rect x="-25" y="5263" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="110" y="5294" text-anchor="middle">操作界面 / QML</text>
-  <rect x="415" y="5263" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="550" y="5294" text-anchor="middle">LaserCalibrationController</text>
-  <rect x="855" y="5263" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="990" y="5294" text-anchor="middle">机械臂</text>
-  <rect x="1295" y="5263" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="1430" y="5294" text-anchor="middle">接收机设备</text>
-  <rect x="1735" y="5263" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="1870" y="5294" text-anchor="middle">LaserVisionProcessor</text>
+  <text class="label" x="550" y="5132" text-anchor="middle">completeCurrentSlot() → beginNextSlot()</text>
+  <text class="sub" x="550" y="5155" text-anchor="middle">尚有槽位则重复 B～E</text>
+  <text class="step" x="36" y="5218">62</text>
+  <rect x="360" y="5185" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="5210" text-anchor="middle">全部槽位完成</text>
+  <text class="sub" x="550" y="5233" text-anchor="middle">finishBatch()，关闭激光/测距/订阅</text>
+  <rect x="-25" y="5341" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="110" y="5372" text-anchor="middle">操作界面 / QML</text>
+  <rect x="415" y="5341" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="550" y="5372" text-anchor="middle">LaserCalibrationController</text>
+  <rect x="855" y="5341" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="990" y="5372" text-anchor="middle">机械臂</text>
+  <rect x="1295" y="5341" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="1430" y="5372" text-anchor="middle">接收机设备</text>
+  <rect x="1735" y="5341" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="1870" y="5372" text-anchor="middle">LaserVisionProcessor</text>
 </svg>

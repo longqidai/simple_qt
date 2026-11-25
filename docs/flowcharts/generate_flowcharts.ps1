@@ -156,11 +156,12 @@ $slamEvents = @(
     (E return 'collecting + 采集目录 path|handleMqttMessage() 保存 m_collectPath' 3 1),
     (E arrow '释放标定轨迹 $$MT,SCANREADY' 1 2),
     (E arrow '执行 SLAM 标定轨迹' 2 2),
-    (E return '返回 SCANREADYOK，轨迹结束返回 RUNFINISH' 2 1),
+    (E return '返回 SCANREADYOK；P7100到位返回 TRAJECTORYFINISH' 2 1),
     (E arrow '停止原始采集 AC_STOP|publishCollectAction()' 1 3),
     (E return 'collect stopped + 最终采集目录' 3 1),
     (E arrow '停止真实扫描 AC_STOP|publishModelingAction(false)' 1 3),
     (E return 'status=6 保存中 → status=7 保存完成' 3 1),
+    (E return '机械臂安全回程完成 RUNFINISH' 2 1),
 
     (E stage 'E. 当前实现：加入下载队列、放回、下一槽位'),
     (E self '保存 DeferredDownload|queueCurrentDownload()，槽位=waiting_download' -1 -1 1),
@@ -172,11 +173,21 @@ $slamEvents = @(
     (E stage 'F. 全部设备放回后统一 FTP 下载'),
     (E arrow '全部机械臂任务结束 $$MT,OVER|beginBatchDownloads()' 1 2),
     (E self '逐条取 DeferredDownload 并重连对应 Wi-Fi|startNextDeferredDownload()' -1 -1 1),
+    (E arrow '提前连接 MQTT 并订阅 data_collect 响应|与 FTP 下载并行建立，避免下载后再次等待' 1 3),
     (E arrow 'curl --list-only 读取 FTP 目录' 1 3),
     (E return '返回文件列表' 3 1),
     (E arrow 'curl 逐文件下载，支持断点续传|startNextFtpFile()' 1 3),
-    (E return 'QProcess::finished → 下一文件/下一设备' 3 1),
-    (E self '全部下载完成并记录成功|finishFtpDownload() → finishTask()' -1 -1 1)
+    (E return 'QProcess::finished → 下一文件' 3 1),
+    (E arrow '下载完成发送 data_collect AC_FINISH|requestCollectFinish()' 1 3),
+    (E return 'collect finished，设备数据和 FTP 目录已删除' 3 1),
+    (E self '记录成功并处理下一设备|finishFtpDownload() → startNextDeferredDownload()' -1 -1 1),
+    (E self '全部设备下载与清理完成|finishTask()' -1 -1 1),
+
+    (E stage 'G. 异常或人工中止的安全收尾'),
+    (E self '进入兜底停止状态|beginGuaranteedMeasurementStop()' -1 -1 1),
+    (E arrow '反复发送 modeling / data_collect AC_STOP|确认真实扫描和原始采集均停止' 1 3),
+    (E arrow '尽力发送 AC_FINISH 清理残留目录|失败会记录告警，但不会永久卡住批次' 1 3),
+    (E self '按机械臂状态安全放回或要求人工恢复' -1 -1 1)
 )
 
 $laserEvents = @(
@@ -187,7 +198,8 @@ $laserEvents = @(
     (E return 'QTcpSocket::connected' 2 1),
     (E arrow '发送握手 $$MT,CONNECT' 1 2),
     (E return '返回 CONNECTOK，机械臂就绪' 2 1),
-    (E arrow '选择槽位并点击开始|startCalibration()' 0 1),
+    (E arrow '选择设备型号、槽位并点击开始|GRR13/17/20 或 SLAM；SLAM 仅1～8号槽' 0 1),
+    (E self '选择匹配机械臂工程|SLAM 使用 SLAM_GRR；GRR 系列使用对应 GRR 工程' -1 -1 1),
     (E self '校验水平线高、建立槽位队列|beginNextSlot() → beginCurrentSlot()' -1 -1 1),
 
     (E stage 'B. 单个槽位循环：扫码、Wi-Fi 与接收机信息'),
@@ -209,7 +221,7 @@ $laserEvents = @(
     (E return '到位返回 MT,OK' 2 1),
     (E arrow '面2校准 set laser planar calibration' 1 3),
     (E return '等待并返回 $LASERBACK：面2 restState=2' 3 1),
-    (E self '单摄像头方案：跳过近焦测量|垂直近点=520；水平近点=界面水平线高' -1 -1 1),
+    (E self '单摄像头方案：跳过近焦测量|SLAM固定水平680/垂直436；GRR按型号固定值' -1 -1 1),
     (E arrow '移动垂直远点 $$MT,NEXT3' 1 2),
     (E return '到位返回 MT,OK' 2 1),
     (E arrow '开启周期测距与自动测距|log laserrangingb ontime 1 + set laser survey auto' 1 3),

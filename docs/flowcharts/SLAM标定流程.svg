@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1540" height="4455" viewBox="0 0 1540 4455">
+<svg xmlns="http://www.w3.org/2000/svg" width="1540" height="5215" viewBox="0 0 1540 5215">
   <defs>
     <marker id="arrow" markerWidth="12" markerHeight="9" refX="10" refY="4.5" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L10,4.5 L0,9 z" fill="#334155"/>
@@ -20,16 +20,16 @@
   <text class="title" x="770" y="55" text-anchor="middle">simple_qt：SLAM 标定正常流程（当前版本）</text>
   <rect x="-25" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="110" y="121" text-anchor="middle">操作界面 / QML</text>
-  <line class="life" x1="110" y1="143" x2="110" y2="4375"/>
+  <line class="life" x1="110" y1="143" x2="110" y2="5135"/>
   <rect x="415" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="550" y="121" text-anchor="middle">上位机 TcpController</text>
-  <line class="life" x1="550" y1="143" x2="550" y2="4375"/>
+  <line class="life" x1="550" y1="143" x2="550" y2="5135"/>
   <rect x="855" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="990" y="121" text-anchor="middle">机械臂 GRR20</text>
-  <line class="life" x1="990" y1="143" x2="990" y2="4375"/>
+  <line class="life" x1="990" y1="143" x2="990" y2="5135"/>
   <rect x="1295" y="85" width="270" height="58" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
   <text class="participant" x="1430" y="121" text-anchor="middle">SLAM 设备</text>
-  <line class="life" x1="1430" y1="143" x2="1430" y2="4375"/>
+  <line class="life" x1="1430" y1="143" x2="1430" y2="5135"/>
   <rect x="35" y="137" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
   <text class="stage" x="55" y="165">A. 程序启动、机械臂连接与任务建立</text>
   <text class="step" x="36" y="228">01</text>
@@ -190,7 +190,7 @@
   <text class="step" x="36" y="2898">33</text>
   <line class="return" x1="990" y1="2893" x2="550" y2="2893"/>
   <rect x="572" y="2859" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="2881" text-anchor="middle">返回 SCANREADYOK，轨迹结束返回 RUNFINISH</text>
+  <text class="label" x="770" y="2881" text-anchor="middle">返回 SCANREADYOK；P7100到位返回 TRAJECTORYFINISH</text>
   <text class="step" x="36" y="2976">34</text>
   <line class="arrow" x1="550" y1="2971" x2="1430" y2="2971"/>
   <rect x="792" y="2937" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
@@ -209,65 +209,106 @@
   <line class="return" x1="1430" y1="3205" x2="550" y2="3205"/>
   <rect x="792" y="3171" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
   <text class="label" x="990" y="3193" text-anchor="middle">status=6 保存中 → status=7 保存完成</text>
-  <rect x="35" y="3255" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="3283">E. 当前实现：加入下载队列、放回、下一槽位</text>
-  <text class="step" x="36" y="3346">38</text>
-  <rect x="360" y="3313" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="3338" text-anchor="middle">保存 DeferredDownload</text>
-  <text class="sub" x="550" y="3361" text-anchor="middle">queueCurrentDownload()，槽位=waiting_download</text>
+  <text class="step" x="36" y="3288">38</text>
+  <line class="return" x1="990" y1="3283" x2="550" y2="3283"/>
+  <rect x="572" y="3249" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3271" text-anchor="middle">机械臂安全回程完成 RUNFINISH</text>
+  <rect x="35" y="3333" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="3361">E. 当前实现：加入下载队列、放回、下一槽位</text>
   <text class="step" x="36" y="3424">39</text>
-  <line class="arrow" x1="550" y1="3419" x2="990" y2="3419"/>
-  <rect x="572" y="3385" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3407" text-anchor="middle">放回设备 $$MT,PUTBACK</text>
+  <rect x="360" y="3391" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3416" text-anchor="middle">保存 DeferredDownload</text>
+  <text class="sub" x="550" y="3439" text-anchor="middle">queueCurrentDownload()，槽位=waiting_download</text>
   <text class="step" x="36" y="3502">40</text>
-  <line class="arrow" x1="990" y1="3497" x2="990" y2="3497"/>
-  <rect x="792" y="3463" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3485" text-anchor="middle">回 Home 并安全放回当前槽位</text>
+  <line class="arrow" x1="550" y1="3497" x2="990" y2="3497"/>
+  <rect x="572" y="3463" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3485" text-anchor="middle">放回设备 $$MT,PUTBACK</text>
   <text class="step" x="36" y="3580">41</text>
-  <line class="return" x1="990" y1="3575" x2="550" y2="3575"/>
-  <rect x="572" y="3541" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3563" text-anchor="middle">返回 PUTBACKOK / MT,OK</text>
+  <line class="arrow" x1="990" y1="3575" x2="990" y2="3575"/>
+  <rect x="792" y="3541" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="3563" text-anchor="middle">回 Home 并安全放回当前槽位</text>
   <text class="step" x="36" y="3658">42</text>
-  <rect x="360" y="3625" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="3650" text-anchor="middle">尚有槽位：startNextSlot() 重复 B～E</text>
-  <rect x="35" y="3703" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text class="stage" x="55" y="3731">F. 全部设备放回后统一 FTP 下载</text>
-  <text class="step" x="36" y="3794">43</text>
-  <line class="arrow" x1="550" y1="3789" x2="990" y2="3789"/>
-  <rect x="572" y="3755" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="770" y="3777" text-anchor="middle">全部机械臂任务结束 $$MT,OVER</text>
-  <text class="sub" x="770" y="3811" text-anchor="middle">beginBatchDownloads()</text>
+  <line class="return" x1="990" y1="3653" x2="550" y2="3653"/>
+  <rect x="572" y="3619" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3641" text-anchor="middle">返回 PUTBACKOK / MT,OK</text>
+  <text class="step" x="36" y="3736">43</text>
+  <rect x="360" y="3703" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3728" text-anchor="middle">尚有槽位：startNextSlot() 重复 B～E</text>
+  <rect x="35" y="3781" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="3809">F. 全部设备放回后统一 FTP 下载</text>
   <text class="step" x="36" y="3872">44</text>
-  <rect x="360" y="3839" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="3864" text-anchor="middle">逐条取 DeferredDownload 并重连对应 Wi-Fi</text>
-  <text class="sub" x="550" y="3887" text-anchor="middle">startNextDeferredDownload()</text>
+  <line class="arrow" x1="550" y1="3867" x2="990" y2="3867"/>
+  <rect x="572" y="3833" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="770" y="3855" text-anchor="middle">全部机械臂任务结束 $$MT,OVER</text>
+  <text class="sub" x="770" y="3889" text-anchor="middle">beginBatchDownloads()</text>
   <text class="step" x="36" y="3950">45</text>
-  <line class="arrow" x1="550" y1="3945" x2="1430" y2="3945"/>
-  <rect x="792" y="3911" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="3933" text-anchor="middle">curl --list-only 读取 FTP 目录</text>
+  <rect x="360" y="3917" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="3942" text-anchor="middle">逐条取 DeferredDownload 并重连对应 Wi-Fi</text>
+  <text class="sub" x="550" y="3965" text-anchor="middle">startNextDeferredDownload()</text>
   <text class="step" x="36" y="4028">46</text>
-  <line class="return" x1="1430" y1="4023" x2="550" y2="4023"/>
+  <line class="arrow" x1="550" y1="4023" x2="1430" y2="4023"/>
   <rect x="792" y="3989" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4011" text-anchor="middle">返回文件列表</text>
+  <text class="label" x="990" y="4011" text-anchor="middle">提前连接 MQTT 并订阅 data_collect 响应</text>
+  <text class="sub" x="990" y="4045" text-anchor="middle">与 FTP 下载并行建立，避免下载后再次等待</text>
   <text class="step" x="36" y="4106">47</text>
   <line class="arrow" x1="550" y1="4101" x2="1430" y2="4101"/>
   <rect x="792" y="4067" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4089" text-anchor="middle">curl 逐文件下载，支持断点续传</text>
-  <text class="sub" x="990" y="4123" text-anchor="middle">startNextFtpFile()</text>
+  <text class="label" x="990" y="4089" text-anchor="middle">curl --list-only 读取 FTP 目录</text>
   <text class="step" x="36" y="4184">48</text>
   <line class="return" x1="1430" y1="4179" x2="550" y2="4179"/>
   <rect x="792" y="4145" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
-  <text class="label" x="990" y="4167" text-anchor="middle">QProcess::finished → 下一文件/下一设备</text>
+  <text class="label" x="990" y="4167" text-anchor="middle">返回文件列表</text>
   <text class="step" x="36" y="4262">49</text>
-  <rect x="360" y="4229" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
-  <text class="label" x="550" y="4254" text-anchor="middle">全部下载完成并记录成功</text>
-  <text class="sub" x="550" y="4277" text-anchor="middle">finishFtpDownload() → finishTask()</text>
-  <rect x="-25" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="110" y="4416" text-anchor="middle">操作界面 / QML</text>
-  <rect x="415" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="550" y="4416" text-anchor="middle">上位机 TcpController</text>
-  <rect x="855" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="990" y="4416" text-anchor="middle">机械臂 GRR20</text>
-  <rect x="1295" y="4385" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
-  <text class="participant" x="1430" y="4416" text-anchor="middle">SLAM 设备</text>
+  <line class="arrow" x1="550" y1="4257" x2="1430" y2="4257"/>
+  <rect x="792" y="4223" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4245" text-anchor="middle">curl 逐文件下载，支持断点续传</text>
+  <text class="sub" x="990" y="4279" text-anchor="middle">startNextFtpFile()</text>
+  <text class="step" x="36" y="4340">50</text>
+  <line class="return" x1="1430" y1="4335" x2="550" y2="4335"/>
+  <rect x="792" y="4301" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4323" text-anchor="middle">QProcess::finished → 下一文件</text>
+  <text class="step" x="36" y="4418">51</text>
+  <line class="arrow" x1="550" y1="4413" x2="1430" y2="4413"/>
+  <rect x="792" y="4379" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4401" text-anchor="middle">下载完成发送 data_collect AC_FINISH</text>
+  <text class="sub" x="990" y="4435" text-anchor="middle">requestCollectFinish()</text>
+  <text class="step" x="36" y="4496">52</text>
+  <line class="return" x1="1430" y1="4491" x2="550" y2="4491"/>
+  <rect x="792" y="4457" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4479" text-anchor="middle">collect finished，设备数据和 FTP 目录已删除</text>
+  <text class="step" x="36" y="4574">53</text>
+  <rect x="360" y="4541" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4566" text-anchor="middle">记录成功并处理下一设备</text>
+  <text class="sub" x="550" y="4589" text-anchor="middle">finishFtpDownload() → startNextDeferredDownload()</text>
+  <text class="step" x="36" y="4652">54</text>
+  <rect x="360" y="4619" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4644" text-anchor="middle">全部设备下载与清理完成</text>
+  <text class="sub" x="550" y="4667" text-anchor="middle">finishTask()</text>
+  <rect x="35" y="4697" width="1470" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text class="stage" x="55" y="4725">G. 异常或人工中止的安全收尾</text>
+  <text class="step" x="36" y="4788">55</text>
+  <rect x="360" y="4755" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="4780" text-anchor="middle">进入兜底停止状态</text>
+  <text class="sub" x="550" y="4803" text-anchor="middle">beginGuaranteedMeasurementStop()</text>
+  <text class="step" x="36" y="4866">56</text>
+  <line class="arrow" x1="550" y1="4861" x2="1430" y2="4861"/>
+  <rect x="792" y="4827" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4849" text-anchor="middle">反复发送 modeling / data_collect AC_STOP</text>
+  <text class="sub" x="990" y="4883" text-anchor="middle">确认真实扫描和原始采集均停止</text>
+  <text class="step" x="36" y="4944">57</text>
+  <line class="arrow" x1="550" y1="4939" x2="1430" y2="4939"/>
+  <rect x="792" y="4905" width="396" height="31" rx="5" fill="#ffffff" opacity="0.96"/>
+  <text class="label" x="990" y="4927" text-anchor="middle">尽力发送 AC_FINISH 清理残留目录</text>
+  <text class="sub" x="990" y="4961" text-anchor="middle">失败会记录告警，但不会永久卡住批次</text>
+  <text class="step" x="36" y="5022">58</text>
+  <rect x="360" y="4989" width="380" height="58" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+  <text class="label" x="550" y="5014" text-anchor="middle">按机械臂状态安全放回或要求人工恢复</text>
+  <rect x="-25" y="5145" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="110" y="5176" text-anchor="middle">操作界面 / QML</text>
+  <rect x="415" y="5145" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="550" y="5176" text-anchor="middle">上位机 TcpController</text>
+  <rect x="855" y="5145" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="990" y="5176" text-anchor="middle">机械臂 GRR20</text>
+  <rect x="1295" y="5145" width="270" height="48" rx="9" fill="#f0edff" stroke="#c4b5fd"/>
+  <text class="participant" x="1430" y="5176" text-anchor="middle">SLAM 设备</text>
 </svg>

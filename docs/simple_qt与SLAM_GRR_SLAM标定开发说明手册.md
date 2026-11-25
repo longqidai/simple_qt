@@ -80,8 +80,12 @@ sequenceDiagram
     H->>A: $$MT,OVER
     loop 统一下载
         H->>H: 按SN重连设备Wi-Fi
+        H->>D: 提前连接MQTT并订阅data_collect响应
         H->>F: curl列目录并下载文件
         F-->>H: SLAM原始数据
+        H->>D: data_collect AC_FINISH
+        D-->>H: collect finished, data and ftp dir removed
+        H->>H: 记录成功并处理下一台
     end
 ```
 
@@ -112,10 +116,13 @@ stateDiagram-v2
     StoppingModeling --> WaitingPutBack: status=7
     WaitingPutBack --> WaitingScan: PUTBACKOK
     WaitingScan --> Downloading: 全部槽位结束
-    Downloading --> Completed
+    Downloading --> FinishingCollection: FTP下载完成
+    FinishingCollection --> Downloading: AC_FINISH成功，下一台
+    FinishingCollection --> Completed: 最后一台清理完成
     Calibrating --> EnsuringMeasurementStopped: 异常或中止
     StartingCollection --> EnsuringMeasurementStopped: 异常或中止
-    EnsuringMeasurementStopped --> WaitingPutBack: 两种采集均停止
+    EnsuringMeasurementStopped --> FinishingCollection: 两种采集均停止，清理残留目录
+    FinishingCollection --> WaitingPutBack: 异常收尾完成
 ```
 
 完整状态枚举位于 `TcpController::FlowState`，还包括 `Recovering`、`Aborted` 等异常收尾状态。
